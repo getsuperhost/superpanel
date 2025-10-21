@@ -121,7 +121,7 @@ public class BackupServiceTests : IDisposable
         result.Type.Should().Be(BackupType.Database);
         result.ServerId.Should().Be(1);
         result.DatabaseId.Should().Be(1);
-        result.Status.Should().Be(BackupStatus.Pending); // Status is Pending initially, changes to Running when backup execution starts
+        result.Status.Should().Be(BackupStatus.Running); // Status changes to Running immediately when backup execution starts
         result.CreatedByUserId.Should().Be(1);
         result.CreatedAt.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(1));
     }
