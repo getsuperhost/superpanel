@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using FluentAssertions;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -12,16 +13,27 @@ using Xunit;
 namespace SuperPanel.WebAPI.Tests;
 
 /// <summary>
+/// Test web application factory for ServersController integration tests
+/// </summary>
+public class ServersTestWebApplicationFactory : WebApplicationFactory<Program>
+{
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        builder.UseEnvironment("Testing");
+    }
+}
+
+/// <summary>
 /// Integration tests for ServersController endpoints.
 /// Tests the full HTTP pipeline including authentication, authorization, and database integration.
 /// </summary>
-public class ServersControllerIntegrationTests : IClassFixture<WebApplicationFactory<Program>>, IDisposable
+public class ServersControllerIntegrationTests : IClassFixture<ServersTestWebApplicationFactory>, IDisposable
 {
     private readonly WebApplicationFactory<Program> _factory;
     private readonly HttpClient _client;
     private readonly string _testDatabaseName;
 
-    public ServersControllerIntegrationTests(WebApplicationFactory<Program> factory)
+    public ServersControllerIntegrationTests(ServersTestWebApplicationFactory factory)
     {
         _testDatabaseName = $"TestDb_{Guid.NewGuid()}";
         

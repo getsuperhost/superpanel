@@ -20,10 +20,10 @@ public class Domain
 
     // Multi-tenancy: Associate domain with user
     public int UserId { get; set; }
-    public virtual User User { get; set; } = null!;
+    public virtual User? User { get; set; }
 
     public int ServerId { get; set; }
-    public virtual Server Server { get; set; } = null!;
+    public virtual Server? Server { get; set; }
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedAt { get; set; }

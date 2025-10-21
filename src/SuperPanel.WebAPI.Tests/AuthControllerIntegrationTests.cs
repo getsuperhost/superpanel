@@ -3,55 +3,46 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using FluentAssertions;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.IdentityModel.Tokens;
 using SuperPanel.WebAPI.Controllers;
 using SuperPanel.WebAPI.Data;
+using SuperPanel.WebAPI.Hubs;
+using SuperPanel.WebAPI.Services;
 using Xunit;
 
 namespace SuperPanel.WebAPI.Tests;
 
 /// <summary>
+/// Test web application factory for integration tests
+/// </summary>
+public class TestWebApplicationFactory : WebApplicationFactory<Program>
+{
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        builder.UseEnvironment("Testing");
+    }
+}
+
+/// <summary>
 /// Integration tests for AuthController endpoints.
 /// Tests the full HTTP pipeline including authentication, routing, and database integration.
 /// </summary>
-public class AuthControllerIntegrationTests : IClassFixture<WebApplicationFactory<Program>>, IDisposable
+public class AuthControllerIntegrationTests : IClassFixture<TestWebApplicationFactory>, IDisposable
 {
-    private readonly WebApplicationFactory<Program> _factory;
+    private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
-    private readonly string _testDatabaseName;
 
-    public AuthControllerIntegrationTests(WebApplicationFactory<Program> factory)
+    public AuthControllerIntegrationTests(TestWebApplicationFactory factory)
     {
-        _testDatabaseName = $"TestDb_{Guid.NewGuid()}";
-        
-        _factory = factory.WithWebHostBuilder(builder =>
-        {
-            builder.ConfigureServices(services =>
-            {
-                // Remove the existing DbContext registration
-                var descriptor = services.SingleOrDefault(
-                    d => d.ServiceType == typeof(DbContextOptions<ApplicationDbContext>));
-                if (descriptor != null)
-                {
-                    services.Remove(descriptor);
-                }
-
-                // Add DbContext using in-memory database for testing
-                services.AddDbContext<ApplicationDbContext>(options =>
-                {
-                    options.UseInMemoryDatabase(_testDatabaseName);
-                });
-
-                // Build the service provider and ensure database is created
-                var serviceProvider = services.BuildServiceProvider();
-                using var scope = serviceProvider.CreateScope();
-                var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-                db.Database.EnsureCreated();
-            });
-        });
-
+        _factory = factory;
         _client = _factory.CreateClient();
     }
 

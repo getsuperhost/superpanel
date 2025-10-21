@@ -28,7 +28,7 @@ public class Server
 
     // Multi-tenancy: Associate server with user
     public int UserId { get; set; }
-    public virtual User User { get; set; } = null!;
+    public virtual User? User { get; set; }
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? LastChecked { get; set; }

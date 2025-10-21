@@ -12,45 +12,24 @@ using Microsoft.AspNetCore.DataProtection;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
-builder.Services.AddDbContext<ApplicationDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+// Configure database based on environment
+if (builder.Environment.IsEnvironment("Testing"))
+{
+    builder.Services.AddDbContext<ApplicationDbContext>(options =>
+        options.UseInMemoryDatabase("TestDb"));
+    
+    // Add JWT configuration for testing
+    builder.Configuration["Jwt:Issuer"] = "SuperPanel";
+    builder.Configuration["Jwt:Audience"] = "SuperPanelUsers";
+    builder.Configuration["Jwt:Key"] = "SuperSecretKey1234567890123456789012345678901234567890";
+}
+else
+{
+    builder.Services.AddDbContext<ApplicationDbContext>(options =>
+        options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+}
 
-// (DataProtection is configured earlier)
-
-// Authentication
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(options =>
-    {
-        options.TokenValidationParameters = new TokenValidationParameters
-        {
-            ValidateIssuer = true,
-            ValidateAudience = true,
-            ValidateLifetime = true,
-            ValidateIssuerSigningKey = true,
-            ValidIssuer = builder.Configuration["Jwt:Issuer"],
-            ValidAudience = builder.Configuration["Jwt:Audience"],
-            IssuerSigningKey = new SymmetricSecurityKey(
-                Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]!))
-        };
-        // Configure SignalR to read JWT from query string
-        options.Events = new JwtBearerEvents
-        {
-            OnMessageReceived = context =>
-            {
-                var accessToken = context.Request.Query["access_token"];
-                if (!string.IsNullOrEmpty(accessToken))
-                {
-                    context.Token = accessToken;
-                }
-                return Task.CompletedTask;
-            }
-        };
-    });
-
-builder.Services.AddAuthorization();
-
-// Register services
+// Register all required services
 builder.Services.AddScoped<IServerService, ServerService>();
 builder.Services.AddScoped<IDomainService, DomainService>();
 builder.Services.AddScoped<IFileService, FileService>();
@@ -68,10 +47,17 @@ builder.Services.AddHttpClient();
 // Add SignalR
 builder.Services.AddSignalR();
 
-// Add background services
-builder.Services.AddHostedService<ServerMonitoringService>();
+// Add background services (skip in testing)
+if (!builder.Environment.IsEnvironment("Testing"))
+{
+    builder.Services.AddHostedService<ServerMonitoringService>();
+}
 
-builder.Services.AddControllers();
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+    {
+        options.JsonSerializerOptions.ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles;
+    });
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
@@ -135,108 +121,163 @@ if (builder.Environment.IsDevelopment())
     });
 }
 
-// Configure Data Protection to persist keys to a mounted volume so keys survive container restarts
-var dataProtectionPath = builder.Configuration["DataProtection:Path"] ?? "/var/aspnet/DataProtection-Keys";
-builder.Services.AddDataProtection()
-    .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionPath));
+// Configure Data Protection based on environment
+if (builder.Environment.IsEnvironment("Testing"))
+{
+    var testDataProtectionPath = Path.Combine(Path.GetTempPath(), "asp-keys-test");
+    builder.Services.AddDataProtection()
+        .PersistKeysToFileSystem(new DirectoryInfo(testDataProtectionPath));
+}
+else
+{
+    var dataProtectionPath = builder.Configuration["DataProtection:Keys:Path"] ?? Path.Combine(Path.GetTempPath(), "asp-keys");
+    builder.Services.AddDataProtection()
+        .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionPath));
+}
+
+// Configure JWT authentication (skip in testing to avoid conflicts)
+if (!builder.Environment.IsEnvironment("Testing"))
+{
+    builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+        .AddJwtBearer(options =>
+        {
+            options.TokenValidationParameters = new TokenValidationParameters
+            {
+                ValidateIssuer = true,
+                ValidateAudience = true,
+                ValidateLifetime = true,
+                ValidateIssuerSigningKey = true,
+                ValidIssuer = builder.Configuration["Jwt:Issuer"],
+                ValidAudience = builder.Configuration["Jwt:Audience"],
+                IssuerSigningKey = new SymmetricSecurityKey(
+                    Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"] ?? throw new InvalidOperationException("JWT Key not configured")))
+            };
+        });
+
+    builder.Services.AddAuthorization();
+}
+else
+{
+    // Configure JWT authentication for testing
+    builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+        .AddJwtBearer(options =>
+        {
+            options.TokenValidationParameters = new TokenValidationParameters
+            {
+                ValidateIssuer = true,
+                ValidateAudience = true,
+                ValidateLifetime = true,
+                ValidateIssuerSigningKey = true,
+                ValidIssuer = "SuperPanel",
+                ValidAudience = "SuperPanelUsers",
+                IssuerSigningKey = new SymmetricSecurityKey(
+                    Encoding.UTF8.GetBytes("SuperSecretKey1234567890123456789012345678901234567890"))
+            };
+        });
+
+    builder.Services.AddAuthorization();
+}
 
 var app = builder.Build();
 
-// Ensure database is created and seeded
-using (var scope = app.Services.CreateScope())
+// Ensure database is created and seeded (skip in testing)
+if (!builder.Environment.IsEnvironment("Testing"))
 {
-    var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-    await dbContext.Database.EnsureCreatedAsync();
-    
-    // Seed with sample data if database is empty
-    // Ensure at least one Administrator user exists. If not, create one.
-    var authService = scope.ServiceProvider.GetRequiredService<IAuthService>();
-    User? adminUser = null;
-    if (!await dbContext.Users.AnyAsync(u => u.Role == "Administrator"))
+    using (var scope = app.Services.CreateScope())
     {
-        var adminPassword = builder.Configuration["Seed:AdminPassword"] ?? "Admin123!";
-        var adminUsername = builder.Configuration["Seed:AdminUsername"] ?? "admin";
-        var adminEmail = builder.Configuration["Seed:AdminEmail"] ?? "admin@localhost";
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        await dbContext.Database.EnsureCreatedAsync();
+        
+        // Seed with sample data if database is empty
+        // Ensure at least one Administrator user exists. If not, create one.
+        var authService = scope.ServiceProvider.GetRequiredService<IAuthService>();
+        User? adminUser = null;
+        if (!await dbContext.Users.AnyAsync(u => u.Role == "Administrator"))
+        {
+            var adminPassword = builder.Configuration["Seed:AdminPassword"] ?? "Admin123!";
+            var adminUsername = builder.Configuration["Seed:AdminUsername"] ?? "admin";
+            var adminEmail = builder.Configuration["Seed:AdminEmail"] ?? "admin@localhost";
 
-        // Avoid username/email collisions by appending a short suffix if necessary
-        if (await dbContext.Users.AnyAsync(u => u.Username == adminUsername))
-        {
-            adminUsername = adminUsername + "-" + Guid.NewGuid().ToString("N").Substring(0, 6);
-        }
+            // Avoid username/email collisions by appending a short suffix if necessary
+            if (await dbContext.Users.AnyAsync(u => u.Username == adminUsername))
+            {
+                adminUsername = adminUsername + "-" + Guid.NewGuid().ToString("N").Substring(0, 6);
+            }
 
-        if (await dbContext.Users.AnyAsync(u => u.Email == adminEmail))
-        {
-            adminEmail = "admin+" + Guid.NewGuid().ToString("N").Substring(0, 6) + "@localhost";
-        }
+            if (await dbContext.Users.AnyAsync(u => u.Email == adminEmail))
+            {
+                adminEmail = "admin+" + Guid.NewGuid().ToString("N").Substring(0, 6) + "@localhost";
+            }
 
-        try
-        {
-            adminUser = await authService.RegisterAsync(adminUsername, adminEmail, adminPassword, "Administrator");
-            Console.WriteLine($"Seeded admin user: {adminUser.Username} (id={adminUser.Id})");
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Failed to seed admin user: {ex.Message}");
-        }
-    }
-    else
-    {
-        adminUser = await dbContext.Users.FirstOrDefaultAsync(u => u.Role == "Administrator");
-    }
-
-    if (!await dbContext.Servers.AnyAsync())
-    {
-        if (adminUser == null)
-        {
-            Console.WriteLine("Cannot seed servers: no admin user found");
+            try
+            {
+                adminUser = await authService.RegisterAsync(adminUsername, adminEmail, adminPassword, "Administrator");
+                Console.WriteLine($"Seeded admin user: {adminUser.Username} (id={adminUser.Id})");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Failed to seed admin user: {ex.Message}");
+            }
         }
         else
         {
-            var sampleServers = new List<Server>
+            adminUser = await dbContext.Users.FirstOrDefaultAsync(u => u.Role == "Administrator");
+        }
+
+        if (!await dbContext.Servers.AnyAsync())
+        {
+            if (adminUser == null)
             {
-                new Server
+                Console.WriteLine("Cannot seed servers: no admin user found");
+            }
+            else
+            {
+                var sampleServers = new List<Server>
                 {
-                    Name = "WebServer-01",
-                    IpAddress = "192.168.1.100",
-                    Description = "Primary web server",
-                    OperatingSystem = "Ubuntu 22.04 LTS",
-                    Status = ServerStatus.Online,
-                    CpuUsage = 45.2,
-                    MemoryUsage = 68.7,
-                    DiskUsage = 72.1,
-                    UserId = adminUser.Id,
-                    CreatedAt = DateTime.UtcNow
-                },
-                new Server
-                {
-                    Name = "Database-01", 
-                    IpAddress = "192.168.1.101",
-                    Description = "Database server",
-                    OperatingSystem = "Ubuntu 22.04 LTS",
-                    Status = ServerStatus.Online,
-                    CpuUsage = 23.8,
-                    MemoryUsage = 54.3,
-                    DiskUsage = 45.6,
-                    UserId = adminUser.Id,
-                    CreatedAt = DateTime.UtcNow
-                },
-                new Server
-                {
-                    Name = "MailServer-01",
-                    IpAddress = "192.168.1.102", 
-                    Description = "Email server",
-                    OperatingSystem = "Ubuntu 22.04 LTS",
-                    Status = ServerStatus.Maintenance,
-                    CpuUsage = 12.4,
-                    MemoryUsage = 34.2,
-                    DiskUsage = 28.9,
-                    UserId = adminUser.Id,
-                    CreatedAt = DateTime.UtcNow
-                }
-            };
-            
-            await dbContext.Servers.AddRangeAsync(sampleServers);
-            await dbContext.SaveChangesAsync();
+                    new Server
+                    {
+                        Name = "WebServer-01",
+                        IpAddress = "192.168.1.100",
+                        Description = "Primary web server",
+                        OperatingSystem = "Ubuntu 22.04 LTS",
+                        Status = ServerStatus.Online,
+                        CpuUsage = 45.2,
+                        MemoryUsage = 68.7,
+                        DiskUsage = 72.1,
+                        UserId = adminUser.Id,
+                        CreatedAt = DateTime.UtcNow
+                    },
+                    new Server
+                    {
+                        Name = "Database-01",
+                        IpAddress = "192.168.1.101",
+                        Description = "Database server",
+                        OperatingSystem = "Ubuntu 22.04 LTS",
+                        Status = ServerStatus.Online,
+                        CpuUsage = 23.8,
+                        MemoryUsage = 54.3,
+                        DiskUsage = 45.6,
+                        UserId = adminUser.Id,
+                        CreatedAt = DateTime.UtcNow
+                    },
+                    new Server
+                    {
+                        Name = "MailServer-01",
+                        IpAddress = "192.168.1.102",
+                        Description = "Email server",
+                        OperatingSystem = "Ubuntu 22.04 LTS",
+                        Status = ServerStatus.Maintenance,
+                        CpuUsage = 12.4,
+                        MemoryUsage = 34.2,
+                        DiskUsage = 28.9,
+                        UserId = adminUser.Id,
+                        CreatedAt = DateTime.UtcNow
+                    }
+                };
+                
+                await dbContext.Servers.AddRangeAsync(sampleServers);
+                await dbContext.SaveChangesAsync();
+            }
         }
     }
 }
@@ -249,8 +290,19 @@ if (app.Environment.IsDevelopment())
     app.UseHttpsRedirection();
 }
 app.UseCors("AllowWebUI");
-app.UseAuthentication();
-app.UseAuthorization();
+
+// Authentication middleware - skip in tests to avoid conflicts
+if (!builder.Environment.IsEnvironment("Testing"))
+{
+    app.UseAuthentication();
+    app.UseAuthorization();
+}
+else
+{
+    // For testing environment, use authentication configured by TestWebApplicationFactory
+    app.UseAuthentication();
+    app.UseAuthorization();
+}
 
 app.MapControllers();
 

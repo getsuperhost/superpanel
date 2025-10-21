@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using FluentAssertions;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -12,21 +13,37 @@ using Xunit;
 namespace SuperPanel.WebAPI.Tests;
 
 /// <summary>
+/// Test web application factory for DatabasesController integration tests
+/// </summary>
+public class DatabasesTestWebApplicationFactory : WebApplicationFactory<Program>
+{
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        builder.UseEnvironment("Testing");
+    }
+}
+
+/// <summary>
 /// Integration tests for DatabasesController endpoints.
 /// Tests the full HTTP pipeline including authentication, authorization, and database integration.
 /// </summary>
-public class DatabasesControllerIntegrationTests : IClassFixture<WebApplicationFactory<Program>>, IDisposable
+public class DatabasesControllerIntegrationTests : IClassFixture<DatabasesTestWebApplicationFactory>, IDisposable
 {
     private readonly WebApplicationFactory<Program> _factory;
     private readonly HttpClient _client;
     private readonly string _testDatabaseName;
 
-    public DatabasesControllerIntegrationTests(WebApplicationFactory<Program> factory)
+    public DatabasesControllerIntegrationTests(DatabasesTestWebApplicationFactory factory)
     {
         _testDatabaseName = $"TestDb_{Guid.NewGuid()}";
         
         _factory = factory.WithWebHostBuilder(builder =>
         {
+            builder.ConfigureAppConfiguration((context, config) =>
+            {
+                context.HostingEnvironment.EnvironmentName = "Testing";
+            });
+            
             builder.ConfigureServices(services =>
             {
                 // Remove the existing DbContext registration

@@ -21,10 +21,10 @@ public class Database
 
     // Multi-tenancy: Associate database with user
     public int UserId { get; set; }
-    public virtual User User { get; set; } = null!;
+    public virtual User? User { get; set; }
 
     public int ServerId { get; set; }
-    public virtual Server Server { get; set; } = null!;
+    public virtual Server? Server { get; set; }
 
     public DatabaseStatus Status { get; set; } = DatabaseStatus.Active;
 
