@@ -15,6 +15,7 @@ public class BackupServiceTests : IDisposable
     private readonly ApplicationDbContext _context;
     private readonly Mock<ILogger<BackupService>> _loggerMock;
     private readonly Mock<IConfiguration> _configurationMock;
+    private readonly Mock<IDbContextFactory<ApplicationDbContext>> _contextFactoryMock;
     private readonly BackupService _backupService;
     private readonly string _databaseName;
 
@@ -28,12 +29,16 @@ public class BackupServiceTests : IDisposable
         _context = new ApplicationDbContext(options);
         _loggerMock = new Mock<ILogger<BackupService>>();
         _configurationMock = new Mock<IConfiguration>();
+        _contextFactoryMock = new Mock<IDbContextFactory<ApplicationDbContext>>();
+
+        // Setup the factory mock to return new context instances with the same options
+        _contextFactoryMock.Setup(f => f.CreateDbContext()).Returns(() => new ApplicationDbContext(options));
 
         // Setup configuration mock
         _configurationMock.Setup(c => c["BackupSettings:BackupDirectory"])
             .Returns("/tmp/backups");
 
-        _backupService = new BackupService(_context, _loggerMock.Object, _configurationMock.Object);
+        _backupService = new BackupService(_contextFactoryMock.Object, _loggerMock.Object, _configurationMock.Object);
 
         // Seed test data
         SeedTestData();
@@ -121,7 +126,7 @@ public class BackupServiceTests : IDisposable
         result.Type.Should().Be(BackupType.Database);
         result.ServerId.Should().Be(1);
         result.DatabaseId.Should().Be(1);
-        result.Status.Should().Be(BackupStatus.Running); // Status changes to Running immediately when backup execution starts
+        result.Status.Should().Be(BackupStatus.Pending); // Status is Pending when backup is created, changes to Running when execution starts
         result.CreatedByUserId.Should().Be(1);
         result.CreatedAt.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(1));
     }

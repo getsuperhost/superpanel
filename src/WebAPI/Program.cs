@@ -15,6 +15,8 @@ var builder = WebApplication.CreateBuilder(args);
 // Configure database based on environment
 if (builder.Environment.IsEnvironment("Testing"))
 {
+    builder.Services.AddDbContextFactory<ApplicationDbContext>(options =>
+        options.UseInMemoryDatabase("TestDb"));
     builder.Services.AddDbContext<ApplicationDbContext>(options =>
         options.UseInMemoryDatabase("TestDb"));
     
@@ -25,6 +27,8 @@ if (builder.Environment.IsEnvironment("Testing"))
 }
 else
 {
+    builder.Services.AddDbContextFactory<ApplicationDbContext>(options =>
+        options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
     builder.Services.AddDbContext<ApplicationDbContext>(options =>
         options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 }
