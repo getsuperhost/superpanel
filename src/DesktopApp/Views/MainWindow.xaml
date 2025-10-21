@@ -1,0 +1,169 @@
+<Window x:Class="SuperPanel.DesktopApp.Views.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="http://schemas.modernwpf.com/2019"
+        xmlns:local="clr-namespace:SuperPanel.DesktopApp.Views"
+        Title="SuperPanel - Web Host Control Panel" 
+        Height="800" 
+        Width="1200"
+        WindowStartupLocation="CenterScreen"
+        ui:WindowHelper.UseModernWindowStyle="True">
+    
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        
+        <!-- Title Bar -->
+        <Border Grid.Row="0" Background="{DynamicResource SystemControlBackgroundAccentBrush}" Height="60">
+            <Grid>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="20,0">
+                    <TextBlock Text="SuperPanel" FontSize="24" FontWeight="Bold" Foreground="White" VerticalAlignment="Center"/>
+                    <TextBlock Text="Web Host Control Panel" FontSize="14" Foreground="White" VerticalAlignment="Bottom" Margin="10,0,0,5"/>
+                </StackPanel>
+                
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="20,0">
+                    <TextBlock Text="{Binding SystemInfo.ServerName}" FontSize="12" Foreground="White" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                    <Button Content="⟲" Width="30" Height="30" Command="{Binding RefreshSystemInfoCommand}" 
+                            ToolTip="Refresh System Info" Style="{StaticResource AccentButtonStyle}"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+        
+        <!-- Main Content -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="250"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            
+            <!-- Navigation Menu -->
+            <Border Grid.Column="0" Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}">
+                <ScrollViewer>
+                    <StackPanel Margin="10">
+                        <!-- Dashboard -->
+                        <Button Content="📊 Dashboard" 
+                                Height="40" 
+                                HorizontalAlignment="Stretch" 
+                                HorizontalContentAlignment="Left"
+                                Margin="0,5"
+                                Command="{Binding NavigateCommand}"
+                                CommandParameter="Dashboard"
+                                Style="{StaticResource NavigationButtonStyle}"/>
+                        
+                        <!-- Servers -->
+                        <Button Content="🖥️ Servers" 
+                                Height="40" 
+                                HorizontalAlignment="Stretch" 
+                                HorizontalContentAlignment="Left"
+                                Margin="0,5"
+                                Command="{Binding NavigateCommand}"
+                                CommandParameter="Servers"
+                                Style="{StaticResource NavigationButtonStyle}"/>
+                        
+                        <!-- Domains -->
+                        <Button Content="🌐 Domains" 
+                                Height="40" 
+                                HorizontalAlignment="Stretch" 
+                                HorizontalContentAlignment="Left"
+                                Margin="0,5"
+                                Command="{Binding NavigateCommand}"
+                                CommandParameter="Domains"
+                                Style="{StaticResource NavigationButtonStyle}"/>
+                        
+                        <!-- File Manager -->
+                        <Button Content="📁 File Manager" 
+                                Height="40" 
+                                HorizontalAlignment="Stretch" 
+                                HorizontalContentAlignment="Left"
+                                Margin="0,5"
+                                Command="{Binding NavigateCommand}"
+                                CommandParameter="FileManager"
+                                Style="{StaticResource NavigationButtonStyle}"/>
+                        
+                        <!-- Monitoring -->
+                        <Button Content="📈 Monitoring" 
+                                Height="40" 
+                                HorizontalAlignment="Stretch" 
+                                HorizontalContentAlignment="Left"
+                                Margin="0,5"
+                                Command="{Binding NavigateCommand}"
+                                CommandParameter="Monitoring"
+                                Style="{StaticResource NavigationButtonStyle}"/>
+                        
+                        <!-- System Info Panel -->
+                        <Border Background="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}" 
+                                CornerRadius="5" 
+                                Margin="0,20,0,0" 
+                                Padding="10">
+                            <StackPanel>
+                                <TextBlock Text="System Information" FontWeight="Bold" Margin="0,0,0,10"/>
+                                <TextBlock Text="{Binding SystemInfo.OperatingSystem, StringFormat='OS: {0}'}" 
+                                           TextWrapping="Wrap" Margin="0,2"/>
+                                <TextBlock Text="{Binding SystemInfo.CpuUsagePercent, StringFormat='CPU: {0:F1}%'}" 
+                                           Margin="0,2"/>
+                                <TextBlock Text="{Binding SystemInfo.AvailableMemoryMB, StringFormat='Memory: {0} MB available'}" 
+                                           Margin="0,2"/>
+                                <TextBlock Text="{Binding SystemInfo.LastUpdated, StringFormat='Updated: {0:HH:mm:ss}'}" 
+                                           Foreground="Gray" FontSize="10" Margin="0,5,0,0"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
+            
+            <!-- Content Area -->
+            <Border Grid.Column="1" Background="{DynamicResource SystemControlPageBackgroundChromeLowBrush}">
+                <Grid>
+                    <!-- Dashboard View -->
+                    <local:DashboardView Visibility="{Binding SelectedView, Converter={StaticResource ViewVisibilityConverter}, ConverterParameter=Dashboard}"/>
+                    
+                    <!-- Servers View -->
+                    <local:ServersView DataContext="{Binding ServerViewModel}" 
+                                       Visibility="{Binding DataContext.SelectedView, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource ViewVisibilityConverter}, ConverterParameter=Servers}"/>
+                    
+                    <!-- Domains View -->
+                    <local:DomainsView DataContext="{Binding DomainViewModel}" 
+                                       Visibility="{Binding DataContext.SelectedView, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource ViewVisibilityConverter}, ConverterParameter=Domains}"/>
+                    
+                    <!-- File Manager View -->
+                    <local:FileManagerView DataContext="{Binding FileManagerViewModel}" 
+                                           Visibility="{Binding DataContext.SelectedView, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource ViewVisibilityConverter}, ConverterParameter=FileManager}"/>
+                    
+                    <!-- Monitoring View -->
+                    <local:MonitoringView DataContext="{Binding MonitoringViewModel}" 
+                                          Visibility="{Binding DataContext.SelectedView, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource ViewVisibilityConverter}, ConverterParameter=Monitoring}"/>
+                </Grid>
+            </Border>
+        </Grid>
+        
+        <!-- Status Bar -->
+        <Border Grid.Row="2" Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}" Height="25">
+            <Grid>
+                <TextBlock Text="Ready" VerticalAlignment="Center" Margin="10,0"/>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="10,0">
+                    <TextBlock Text="{Binding SystemInfo.ServerName}" Margin="0,0,10,0"/>
+                    <Rectangle Width="10" Height="10" Fill="Green" VerticalAlignment="Center"/>
+                    <TextBlock Text="Online" Margin="5,0"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+    
+    <Window.Resources>
+        <local:ViewVisibilityConverter x:Key="ViewVisibilityConverter"/>
+        
+        <Style x:Key="NavigationButtonStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="10,8"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundListLowBrush}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+</Window>

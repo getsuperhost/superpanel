@@ -1,0 +1,26 @@
+<UserControl x:Class="SuperPanel.DesktopApp.Views.DomainsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        
+        <TextBlock Grid.Row="0" Text="Domains" FontSize="28" FontWeight="Bold" Margin="0,0,0,20"/>
+        
+        <DataGrid Grid.Row="1" 
+                  ItemsSource="{Binding Domains}"
+                  AutoGenerateColumns="False"
+                  CanUserAddRows="False"
+                  Background="Transparent">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Domain Name" Binding="{Binding Name}" Width="200"/>
+                <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="100"/>
+                <DataGridTextColumn Header="SSL Enabled" Binding="{Binding SslEnabled}" Width="100"/>
+                <DataGridTextColumn Header="SSL Expiry" Binding="{Binding SslExpiry, StringFormat='yyyy-MM-dd'}" Width="120"/>
+                <DataGridTextColumn Header="Created" Binding="{Binding CreatedAt, StringFormat='yyyy-MM-dd'}" Width="120"/>
+            </DataGrid.Columns>
+        </DataGrid>
+    </Grid>
+</UserControl>

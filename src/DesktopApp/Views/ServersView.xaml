@@ -1,0 +1,154 @@
+<UserControl x:Class="SuperPanel.DesktopApp.Views.ServersView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.modernwpf.com/2019">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        
+        <!-- Header -->
+        <Grid Grid.Row="0" Margin="0,0,0,20">
+            <TextBlock Text="Servers" FontSize="28" FontWeight="Bold" VerticalAlignment="Center"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Content="➕ Add Server" 
+                        Height="35" 
+                        Margin="0,0,10,0"
+                        Command="{Binding AddServerCommand}"
+                        Style="{StaticResource AccentButtonStyle}"/>
+                <Button Content="🔄 Refresh" 
+                        Height="35"
+                        Command="{Binding LoadServersCommand}"/>
+            </StackPanel>
+        </Grid>
+        
+        <!-- Loading Indicator -->
+        <ProgressBar Grid.Row="1" 
+                     Height="4" 
+                     IsIndeterminate="{Binding IsLoading}" 
+                     Visibility="{Binding IsLoading, Converter={StaticResource BooleanToVisibilityConverter}}"
+                     Margin="0,0,0,10"/>
+        
+        <!-- Servers List -->
+        <DataGrid Grid.Row="2" 
+                  ItemsSource="{Binding Servers}"
+                  SelectedItem="{Binding SelectedServer}"
+                  AutoGenerateColumns="False"
+                  CanUserAddRows="False"
+                  CanUserDeleteRows="False"
+                  GridLinesVisibility="Horizontal"
+                  HeadersVisibility="Column"
+                  Background="Transparent">
+            
+            <DataGrid.Columns>
+                <!-- Status Indicator -->
+                <DataGridTemplateColumn Header="Status" Width="80">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal">
+                                <Ellipse Width="12" Height="12" VerticalAlignment="Center" Margin="0,0,5,0">
+                                    <Ellipse.Fill>
+                                        <SolidColorBrush>
+                                            <SolidColorBrush.Color>
+                                                <MultiBinding Converter="{StaticResource ServerStatusToColorConverter}">
+                                                    <Binding Path="Status"/>
+                                                </MultiBinding>
+                                            </SolidColorBrush.Color>
+                                        </SolidColorBrush>
+                                    </Ellipse.Fill>
+                                </Ellipse>
+                                <TextBlock Text="{Binding Status}" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                
+                <!-- Server Name -->
+                <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="150"/>
+                
+                <!-- IP Address -->
+                <DataGridTextColumn Header="IP Address" Binding="{Binding IpAddress}" Width="120"/>
+                
+                <!-- Operating System -->
+                <DataGridTextColumn Header="OS" Binding="{Binding OperatingSystem}" Width="150"/>
+                
+                <!-- CPU Usage -->
+                <DataGridTemplateColumn Header="CPU %" Width="80">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <StackPanel>
+                                <TextBlock Text="{Binding CpuUsage, StringFormat='{0:F1}%'}" HorizontalAlignment="Center"/>
+                                <ProgressBar Value="{Binding CpuUsage}" Maximum="100" Height="4" Margin="0,2,0,0"/>
+                            </StackPanel>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                
+                <!-- Memory Usage -->
+                <DataGridTextColumn Header="Memory (MB)" Binding="{Binding MemoryUsage, StringFormat='{0:F0}'}" Width="100"/>
+                
+                <!-- Disk Usage -->
+                <DataGridTemplateColumn Header="Disk %" Width="80">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <StackPanel>
+                                <TextBlock Text="{Binding DiskUsage, StringFormat='{0:F1}%'}" HorizontalAlignment="Center"/>
+                                <ProgressBar Value="{Binding DiskUsage}" Maximum="100" Height="4" Margin="0,2,0,0"/>
+                            </StackPanel>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                
+                <!-- Last Checked -->
+                <DataGridTextColumn Header="Last Checked" Binding="{Binding LastChecked, StringFormat='{0:MM/dd HH:mm}'}" Width="100"/>
+                
+                <!-- Actions -->
+                <DataGridTemplateColumn Header="Actions" Width="150">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal">
+                                <Button Content="🔄" 
+                                        Width="30" Height="25" 
+                                        Margin="0,0,5,0"
+                                        Command="{Binding DataContext.RefreshServerCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                        CommandParameter="{Binding}"
+                                        ToolTip="Refresh"/>
+                                <Button Content="✏️" 
+                                        Width="30" Height="25" 
+                                        Margin="0,0,5,0"
+                                        Command="{Binding DataContext.EditServerCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                        CommandParameter="{Binding}"
+                                        ToolTip="Edit"/>
+                                <Button Content="🗑️" 
+                                        Width="30" Height="25"
+                                        Command="{Binding DataContext.DeleteServerCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                        CommandParameter="{Binding}"
+                                        ToolTip="Delete"
+                                        Style="{StaticResource DangerButtonStyle}"/>
+                            </StackPanel>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+            </DataGrid.Columns>
+        </DataGrid>
+    </Grid>
+    
+    <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
+        
+        <!-- Server Status to Color Converter would need to be implemented -->
+        <local:ServerStatusToColorConverter x:Key="ServerStatusToColorConverter"/>
+        
+        <Style x:Key="DangerButtonStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+            <Setter Property="Background" Value="#F44336"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#D32F2F"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </UserControl.Resources>
+</UserControl>

@@ -1,0 +1,57 @@
+services:
+  # SQL Server Database
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      SA_PASSWORD: "SuperPanel123!"
+      MSSQL_PID: "Express"
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqlserver_data:/var/opt/mssql
+    networks:
+      - superpanel-network
+
+  # Web API
+  webapi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Production"
+      ASPNETCORE_URLS: "http://+:80"
+      ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=SuperPanelDb;User Id=sa;Password=SuperPanel123!;TrustServerCertificate=true"
+      DataProtection__Path: "/var/aspnet/DataProtection-Keys"
+      Seed__AdminPassword: "Admin123!"
+      Seed__AdminUsername: "admin"
+      Seed__AdminEmail: "admin@localhost"
+    ports:
+      - "7001:80"
+    depends_on:
+      - sqlserver
+    networks:
+      - superpanel-network
+    volumes:
+      - /var/www:/var/www  # Mount for file management
+      - ./data/webapi-keys:/var/aspnet/DataProtection-Keys
+
+  # Web UI (Nginx serving static files)
+  webui:
+    build:
+      context: ./src/WebUI
+      dockerfile: Dockerfile.nginx
+    ports:
+      - "3000:80"
+    depends_on:
+      - webapi
+    networks:
+      - superpanel-network
+
+volumes:
+  sqlserver_data:
+  # webapi_keys removed; using host bind mount ./data/webapi-keys
+
+networks:
+  superpanel-network:
+    driver: bridge
