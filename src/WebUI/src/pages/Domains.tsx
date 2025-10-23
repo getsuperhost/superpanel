@@ -7,6 +7,7 @@ import {
   Modal,
   Form,
   Input,
+  InputNumber,
   Select,
   Tag,
   Space,
@@ -19,6 +20,7 @@ import {
   Row,
   Col,
   Statistic,
+  Tabs,
 } from 'antd';
 import {
   PlusOutlined,
@@ -32,7 +34,8 @@ import {
   SettingOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import { domainApi, serverApi, Domain, Server, DomainStatus } from '../services/api';
+import { domainApi, serverApi } from '../services/api';
+import { Domain, Server, DomainStatus, DnsRecord, DnsRecordType, DnsRecordStatus } from '../types/domains';
 
 const { Title } = Typography;
 
@@ -44,6 +47,17 @@ const Domains: React.FC = () => {
   const [editingDomain, setEditingDomain] = useState<Domain | null>(null);
   const [form] = Form.useForm();
   const [error, setError] = useState<string | null>(null);
+
+  // DNS Records state
+  const [dnsRecords, setDnsRecords] = useState<DnsRecord[]>([]);
+  const [dnsModalVisible, setDnsModalVisible] = useState(false);
+  const [editingDnsRecord, setEditingDnsRecord] = useState<DnsRecord | null>(null);
+  const [selectedDomain, setSelectedDomain] = useState<Domain | null>(null);
+  const [dnsForm] = Form.useForm();
+
+  // DNS Zone File state
+  const [zoneFile, setZoneFile] = useState<string>('');
+  const [zoneFileLoading, setZoneFileLoading] = useState(false);
 
   // Load domains and servers on component mount
   useEffect(() => {
@@ -68,6 +82,29 @@ const Domains: React.FC = () => {
       setError(err instanceof Error ? err.message : 'Failed to load domains');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadDnsRecords = async (domainId: number) => {
+    try {
+      const records = await domainApi.getDnsRecords(domainId);
+      setDnsRecords(records);
+    } catch (err) {
+      console.error('Failed to load DNS records:', err);
+      message.error('Failed to load DNS records');
+    }
+  };
+
+  const loadZoneFile = async (domainId: number) => {
+    try {
+      setZoneFileLoading(true);
+      const zone = await domainApi.getDnsZone(domainId);
+      setZoneFile(zone.zoneFile || '');
+    } catch (err) {
+      console.error('Failed to load zone file:', err);
+      message.error('Failed to load zone file');
+    } finally {
+      setZoneFileLoading(false);
     }
   };
 
@@ -97,6 +134,64 @@ const Domains: React.FC = () => {
     } catch (err) {
       message.error('Failed to delete domain');
       console.error('Delete domain error:', err);
+    }
+  };
+
+  // DNS Record handlers
+  const handleManageDns = (domain: Domain) => {
+    setSelectedDomain(domain);
+    loadDnsRecords(domain.id);
+    setDnsModalVisible(true);
+  };
+
+  const handleCreateDnsRecord = () => {
+    setEditingDnsRecord(null);
+    dnsForm.resetFields();
+  };
+
+  const handleEditDnsRecord = (record: DnsRecord) => {
+    setEditingDnsRecord(record);
+    dnsForm.setFieldsValue({
+      type: record.type,
+      name: record.name,
+      value: record.value,
+      ttl: record.ttl,
+      priority: record.priority,
+    });
+  };
+
+  const handleDeleteDnsRecord = async (recordId: number) => {
+    if (!selectedDomain) return;
+    try {
+      await domainApi.deleteDnsRecord(selectedDomain.id, recordId);
+      message.success('DNS record deleted successfully');
+      loadDnsRecords(selectedDomain.id);
+    } catch (err) {
+      message.error('Failed to delete DNS record');
+      console.error('Delete DNS record error:', err);
+    }
+  };
+
+  const handleDnsModalOk = async () => {
+    if (!selectedDomain) return;
+    try {
+      const values = await dnsForm.validateFields();
+
+      if (editingDnsRecord) {
+        // Update existing DNS record
+        await domainApi.updateDnsRecord(selectedDomain.id, editingDnsRecord.id, values);
+        message.success('DNS record updated successfully');
+      } else {
+        // Create new DNS record
+        await domainApi.createDnsRecord(selectedDomain.id, values);
+        message.success('DNS record created successfully');
+      }
+
+      setDnsModalVisible(false);
+      loadDnsRecords(selectedDomain.id);
+    } catch (err) {
+      message.error('Failed to save DNS record');
+      console.error('Save DNS record error:', err);
     }
   };
 
@@ -228,6 +323,13 @@ const Domains: React.FC = () => {
               type="text"
               icon={<EditOutlined />}
               onClick={() => handleEditDomain(record)}
+            />
+          </Tooltip>
+          <Tooltip title="Manage DNS Records">
+            <Button
+              type="text"
+              icon={<GlobalOutlined />}
+              onClick={() => handleManageDns(record)}
             />
           </Tooltip>
           <Tooltip title="Domain Settings">
@@ -431,6 +533,242 @@ const Domains: React.FC = () => {
             <input type="checkbox" />
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* DNS Records Modal */}
+      <Modal
+        title={`DNS Records for ${selectedDomain?.name || ''}`}
+        open={dnsModalVisible}
+        onCancel={() => setDnsModalVisible(false)}
+        width={1000}
+        footer={[
+          <Button key="close" onClick={() => setDnsModalVisible(false)}>
+            Close
+          </Button>,
+        ]}
+      >
+        <div style={{ marginBottom: '16px' }}>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={handleCreateDnsRecord}
+          >
+            Add DNS Record
+          </Button>
+        </div>
+
+        <Tabs defaultActiveKey="1" style={{ marginBottom: '16px' }}>
+          <Tabs.TabPane tab="DNS Records" key="1">
+            <Table
+              columns={[
+                {
+                  title: 'Type',
+                  dataIndex: 'type',
+                  key: 'type',
+                  render: (type: DnsRecordType) => (
+                    <Tag color="blue">{DnsRecordType[type]}</Tag>
+                  ),
+                  filters: Object.values(DnsRecordType).map(type => ({
+                    text: DnsRecordType[type],
+                    value: type,
+                  })),
+                  onFilter: (value, record) => record.type === value,
+                },
+                {
+                  title: 'Name',
+                  dataIndex: 'name',
+                  key: 'name',
+                },
+                {
+                  title: 'Value',
+                  dataIndex: 'value',
+                  key: 'value',
+                },
+                {
+                  title: 'TTL',
+                  dataIndex: 'ttl',
+                  key: 'ttl',
+                  render: (ttl: number) => `${ttl}s`,
+                },
+                {
+                  title: 'Priority',
+                  dataIndex: 'priority',
+                  key: 'priority',
+                  render: (priority: number | null) => priority || '-',
+                },
+                {
+                  title: 'Status',
+                  dataIndex: 'status',
+                  key: 'status',
+                  render: (status: DnsRecordStatus) => (
+                    <Tag color={status === DnsRecordStatus.Active ? 'green' : 'orange'}>
+                      {DnsRecordStatus[status]}
+                    </Tag>
+                  ),
+                },
+                {
+                  title: 'Actions',
+                  key: 'actions',
+                  render: (_, record: DnsRecord) => (
+                    <Space size="small">
+                      <Tooltip title="Edit Record">
+                        <Button
+                          type="text"
+                          icon={<EditOutlined />}
+                          onClick={() => handleEditDnsRecord(record)}
+                        />
+                      </Tooltip>
+                      <Popconfirm
+                        title="Delete DNS Record"
+                        description="Are you sure you want to delete this DNS record?"
+                        onConfirm={() => handleDeleteDnsRecord(record.id)}
+                        okText="Yes"
+                        cancelText="No"
+                      >
+                        <Tooltip title="Delete Record">
+                          <Button
+                            type="text"
+                            danger
+                            icon={<DeleteOutlined />}
+                          />
+                        </Tooltip>
+                      </Popconfirm>
+                    </Space>
+                  ),
+                },
+              ]}
+              dataSource={dnsRecords}
+              rowKey="id"
+              pagination={{
+                pageSize: 10,
+                showSizeChanger: true,
+                showQuickJumper: true,
+                showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} records`,
+              }}
+            />
+          </Tabs.TabPane>
+          <Tabs.TabPane tab="Import/Export" key="2">
+            <p>Import/Export functionality coming soon.</p>
+          </Tabs.TabPane>
+          <Tabs.TabPane tab="Zone File" key="3">
+            <div style={{ marginBottom: 16 }}>
+              <Button
+                type="primary"
+                onClick={async () => {
+                  if (selectedDomain) {
+                    await loadZoneFile(selectedDomain.id);
+                  }
+                }}
+                loading={zoneFileLoading}
+                style={{ marginRight: 8 }}
+              >
+                Load Zone File
+              </Button>
+              <Button
+                onClick={async () => {
+                  if (selectedDomain && zoneFile !== null) {
+                    try {
+                      await domainApi.updateDnsZone(selectedDomain.id, { zoneFile });
+                      message.success('Zone file updated successfully');
+                    } catch (err) {
+                      console.error('Failed to update zone file:', err);
+                      message.error('Failed to update zone file');
+                    }
+                  }
+                }}
+                disabled={zoneFile === null}
+              >
+                Save Zone File
+              </Button>
+            </div>
+            <Input.TextArea
+              value={zoneFile || ''}
+              onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setZoneFile(e.target.value)}
+              placeholder="Zone file content will appear here..."
+              rows={20}
+              style={{ fontFamily: 'monospace' }}
+            />
+          </Tabs.TabPane>
+        </Tabs>
+
+        {/* DNS Record Create/Edit Modal */}
+        <Modal
+          title={editingDnsRecord ? 'Edit DNS Record' : 'Add DNS Record'}
+          open={!!editingDnsRecord || dnsForm.isFieldsTouched()}
+          onOk={handleDnsModalOk}
+          onCancel={() => {
+            setEditingDnsRecord(null);
+            dnsForm.resetFields();
+          }}
+          width={600}
+        >
+          <Form
+            form={dnsForm}
+            layout="vertical"
+            initialValues={{
+              ttl: 3600,
+              priority: null,
+            }}
+          >
+            <Form.Item
+              name="type"
+              label="Record Type"
+              rules={[{ required: true, message: 'Please select record type' }]}
+            >
+              <Select placeholder="Select record type">
+                <Select.Option value={DnsRecordType.A}>A (Address)</Select.Option>
+                <Select.Option value={DnsRecordType.AAAA}>AAAA (IPv6 Address)</Select.Option>
+                <Select.Option value={DnsRecordType.CNAME}>CNAME (Canonical Name)</Select.Option>
+                <Select.Option value={DnsRecordType.MX}>MX (Mail Exchange)</Select.Option>
+                <Select.Option value={DnsRecordType.TXT}>TXT (Text)</Select.Option>
+                <Select.Option value={DnsRecordType.SRV}>SRV (Service)</Select.Option>
+                <Select.Option value={DnsRecordType.PTR}>PTR (Pointer)</Select.Option>
+                <Select.Option value={DnsRecordType.NS}>NS (Name Server)</Select.Option>
+              </Select>
+            </Form.Item>
+
+            <Form.Item
+              name="name"
+              label="Name"
+              rules={[{ required: true, message: 'Please enter record name' }]}
+            >
+              <Input placeholder="subdomain or @ for root" />
+            </Form.Item>
+
+            <Form.Item
+              name="value"
+              label="Value"
+              rules={[{ required: true, message: 'Please enter record value' }]}
+            >
+              <Input placeholder="IP address, domain name, or text value" />
+            </Form.Item>
+
+            <Form.Item
+              name="ttl"
+              label="TTL (Time to Live)"
+              rules={[{ required: true, message: 'Please enter TTL' }]}
+            >
+              <InputNumber
+                min={60}
+                max={86400}
+                placeholder="3600"
+                style={{ width: '100%' }}
+              />
+            </Form.Item>
+
+            <Form.Item
+              name="priority"
+              label="Priority (for MX/SRV records)"
+            >
+              <InputNumber
+                min={0}
+                max={65535}
+                placeholder="Optional"
+                style={{ width: '100%' }}
+              />
+            </Form.Item>
+          </Form>
+        </Modal>
       </Modal>
     </div>
   );

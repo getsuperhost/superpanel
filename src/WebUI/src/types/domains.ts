@@ -42,7 +42,7 @@ export enum SubdomainStatus {
 }
 
 // Import Server from existing types
-interface Server {
+export interface Server {
   id: number;
   name: string;
   ipAddress: string;
