@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using SuperPanel.WebAPI.Services;
 using SuperPanel.WebAPI.Models;
 using System.Security.Claims;
+using System.ComponentModel.DataAnnotations;
 
 namespace SuperPanel.WebAPI.Controllers;
 
@@ -11,10 +12,10 @@ namespace SuperPanel.WebAPI.Controllers;
 [Authorize]
 public class BackupsController : ControllerBase
 {
-    private readonly BackupService _backupService;
+    private readonly IBackupService _backupService;
     private readonly ILogger<BackupsController> _logger;
 
-    public BackupsController(BackupService backupService, ILogger<BackupsController> logger)
+    public BackupsController(IBackupService backupService, ILogger<BackupsController> logger)
     {
         _backupService = backupService;
         _logger = logger;
@@ -22,10 +23,10 @@ public class BackupsController : ControllerBase
 
     private int GetCurrentUserId()
     {
-        var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier);
+        var userIdClaim = User.FindFirst("userId");
         if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out var userId))
         {
-            throw new UnauthorizedAccessException("Invalid user token");
+            throw new UnauthorizedAccessException("Invalid user ID in token");
         }
         return userId;
     }
@@ -156,7 +157,22 @@ public class BackupsController : ControllerBase
             };
 
             var result = await _backupService.RestoreBackupAsync(id, restoreRequest);
-            return Ok(result);
+            if (result.Success)
+                return Ok(result);
+            else
+                return BadRequest(result);
+        }
+        catch (ArgumentException ex)
+        {
+            // Domain-level 'not found' or invalid identifier
+            _logger.LogWarning(ex, "Restore requested for non-existent backup {Id}", id);
+            return NotFound(new { message = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            // Domain-level invalid operation (e.g. wrong state)
+            _logger.LogWarning(ex, "Invalid restore operation for backup {Id}", id);
+            return BadRequest(new { message = ex.Message });
         }
         catch (Exception ex)
         {
@@ -239,6 +255,7 @@ public class BackupsController : ControllerBase
 // DTOs for API requests and responses
 public class CreateBackupRequest
 {
+    [Required]
     public string Name { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
     public BackupType Type { get; set; }

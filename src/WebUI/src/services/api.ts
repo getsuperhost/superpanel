@@ -51,6 +51,7 @@ import {
   AlertComment
 } from "../types/alerts";
 import { DashboardStats } from "../types/dashboard";
+import { DnsRecord, DnsZone, DnsPropagationStatus, DnsRecordType, DnsRecordStatus } from "../types/domains";
 
 // Types
 export interface Server {
@@ -318,11 +319,33 @@ export const domainApi = {
   getById: (id: number): Promise<Domain> => apiClient.get(`/api/domains/${id}`),
   getByServerId: (serverId: number): Promise<Domain[]> =>
     apiClient.get(`/api/domains/server/${serverId}`),
-  create: (domain: Omit<Domain, "id" | "createdAt" | "updatedAt" | "server" | "subdomains">): Promise<Domain> =>
+  create: (domain: Omit<Domain, "id" | "createdAt" | "updatedAt" | "server" | "subdomains" | "dnsRecords" | "dnsZone" | "dnsPropagationStatus">): Promise<Domain> =>
     apiClient.post("/api/domains", domain),
   update: (id: number, domain: Partial<Domain>): Promise<Domain> =>
     apiClient.put(`/api/domains/${id}`, domain),
   delete: (id: number): Promise<void> => apiClient.delete(`/api/domains/${id}`),
+
+  // DNS Record Management
+  getDnsRecords: (domainId: number): Promise<DnsRecord[]> =>
+    apiClient.get(`/api/domains/${domainId}/dns-records`),
+  createDnsRecord: (domainId: number, record: Omit<DnsRecord, "id" | "domainId" | "createdAt" | "updatedAt">): Promise<DnsRecord> =>
+    apiClient.post(`/api/domains/${domainId}/dns-records`, record),
+  updateDnsRecord: (domainId: number, recordId: number, record: Partial<DnsRecord>): Promise<DnsRecord> =>
+    apiClient.put(`/api/domains/${domainId}/dns-records/${recordId}`, record),
+  deleteDnsRecord: (domainId: number, recordId: number): Promise<void> =>
+    apiClient.delete(`/api/domains/${domainId}/dns-records/${recordId}`),
+
+  // DNS Zone Management
+  getDnsZone: (domainId: number): Promise<DnsZone> =>
+    apiClient.get(`/api/domains/${domainId}/dns-zone`),
+  updateDnsZone: (domainId: number, zone: Partial<DnsZone>): Promise<DnsZone> =>
+    apiClient.put(`/api/domains/${domainId}/dns-zone`, zone),
+
+  // DNS Propagation Monitoring
+  getDnsPropagationStatus: (domainId: number): Promise<DnsPropagationStatus> =>
+    apiClient.get(`/api/domains/${domainId}/dns-propagation`),
+  checkDnsPropagation: (domainId: number): Promise<DnsPropagationStatus> =>
+    apiClient.post(`/api/domains/${domainId}/dns-propagation/check`),
 };
 
 // File API functions

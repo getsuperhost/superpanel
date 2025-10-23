@@ -27,6 +27,11 @@ public class ApplicationDbContext : DbContext
     public DbSet<AlertHistory> AlertHistories { get; set; }
     public DbSet<AlertComment> AlertComments { get; set; }
 
+    // DNS entities
+    public DbSet<DnsRecord> DnsRecords { get; set; }
+    public DbSet<DnsZone> DnsZones { get; set; }
+    public DbSet<DnsPropagationStatus> DnsPropagationStatuses { get; set; }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -330,6 +335,46 @@ public class ApplicationDbContext : DbContext
             entity.HasOne(c => c.Alert)
                   .WithMany(a => a.AlertComments)
                   .HasForeignKey(c => c.AlertId)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // DNS Record configuration
+        modelBuilder.Entity<DnsRecord>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.Value).IsRequired().HasMaxLength(1000);
+            entity.Property(e => e.Ttl).HasDefaultValue(3600);
+            entity.Property(e => e.Priority).HasDefaultValue(0);
+
+            entity.HasOne(r => r.Domain)
+                  .WithMany(d => d.DnsRecords)
+                  .HasForeignKey(r => r.DomainId)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // DNS Zone configuration
+        modelBuilder.Entity<DnsZone>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.ZoneFile).HasMaxLength(10000); // Allow large zone files
+            entity.Property(e => e.AutoUpdate).HasDefaultValue(true);
+
+            entity.HasOne(z => z.Domain)
+                  .WithOne(d => d.DnsZone)
+                  .HasForeignKey<DnsZone>(z => z.DomainId)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // DNS Propagation Status configuration
+        modelBuilder.Entity<DnsPropagationStatus>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.ErrorMessage).HasMaxLength(1000);
+
+            entity.HasOne(p => p.Domain)
+                  .WithOne(d => d.DnsPropagationStatus)
+                  .HasForeignKey<DnsPropagationStatus>(p => p.DomainId)
                   .OnDelete(DeleteBehavior.Cascade);
         });
     }

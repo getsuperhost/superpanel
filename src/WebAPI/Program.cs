@@ -9,12 +9,14 @@ using SuperPanel.WebAPI.Hubs;
 using System.Text;
 using System.IO;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.Authorization;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Configure database based on environment
 if (builder.Environment.IsEnvironment("Testing"))
 {
+    Console.WriteLine("Configuring for Testing environment");
     builder.Services.AddDbContextFactory<ApplicationDbContext>(options =>
         options.UseInMemoryDatabase("TestDb"));
     builder.Services.AddDbContext<ApplicationDbContext>(options =>
@@ -27,6 +29,7 @@ if (builder.Environment.IsEnvironment("Testing"))
 }
 else
 {
+    Console.WriteLine("Configuring for Production environment");
     builder.Services.AddDbContextFactory<ApplicationDbContext>(options =>
         options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
     builder.Services.AddDbContext<ApplicationDbContext>(options =>
@@ -44,6 +47,7 @@ builder.Services.AddScoped<IBackupService, BackupService>();
 builder.Services.AddScoped<IAlertService, AlertService>();
 builder.Services.AddScoped<ISslCertificateService, SslCertificateService>();
 builder.Services.AddScoped<IEmailService, EmailService>();
+builder.Services.AddScoped<IDnsService, DnsService>();
 
 // Add HttpClient for notifications
 builder.Services.AddHttpClient();
@@ -139,48 +143,25 @@ else
         .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionPath));
 }
 
-// Configure JWT authentication (skip in testing to avoid conflicts)
-if (!builder.Environment.IsEnvironment("Testing"))
-{
-    builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-        .AddJwtBearer(options =>
+// Configure JWT authentication (use in both production and testing)
+Console.WriteLine("Adding JWT authentication and authorization services");
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
         {
-            options.TokenValidationParameters = new TokenValidationParameters
-            {
-                ValidateIssuer = true,
-                ValidateAudience = true,
-                ValidateLifetime = true,
-                ValidateIssuerSigningKey = true,
-                ValidIssuer = builder.Configuration["Jwt:Issuer"],
-                ValidAudience = builder.Configuration["Jwt:Audience"],
-                IssuerSigningKey = new SymmetricSecurityKey(
-                    Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"] ?? throw new InvalidOperationException("JWT Key not configured")))
-            };
-        });
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = builder.Configuration["Jwt:Issuer"] ?? "SuperPanel",
+            ValidAudience = builder.Configuration["Jwt:Audience"] ?? "SuperPanelUsers",
+            IssuerSigningKey = new SymmetricSecurityKey(
+                Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"] ?? "SuperSecretKeyForTesting12345678901234567890"))
+        };
+    });
 
-    builder.Services.AddAuthorization();
-}
-else
-{
-    // Configure JWT authentication for testing
-    builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-        .AddJwtBearer(options =>
-        {
-            options.TokenValidationParameters = new TokenValidationParameters
-            {
-                ValidateIssuer = true,
-                ValidateAudience = true,
-                ValidateLifetime = true,
-                ValidateIssuerSigningKey = true,
-                ValidIssuer = "SuperPanel",
-                ValidAudience = "SuperPanelUsers",
-                IssuerSigningKey = new SymmetricSecurityKey(
-                    Encoding.UTF8.GetBytes("SuperSecretKey1234567890123456789012345678901234567890"))
-            };
-        });
-
-    builder.Services.AddAuthorization();
-}
+builder.Services.AddAuthorization();
 
 var app = builder.Build();
 
@@ -295,18 +276,11 @@ if (app.Environment.IsDevelopment())
 }
 app.UseCors("AllowWebUI");
 
-// Authentication middleware - skip in tests to avoid conflicts
-if (!builder.Environment.IsEnvironment("Testing"))
-{
-    app.UseAuthentication();
-    app.UseAuthorization();
-}
-else
-{
-    // For testing environment, use authentication configured by TestWebApplicationFactory
-    app.UseAuthentication();
-    app.UseAuthorization();
-}
+// Authentication middleware - always add for both production and testing
+Console.WriteLine($"Environment: {app.Environment.EnvironmentName}");
+Console.WriteLine("Adding authentication and authorization middleware");
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapControllers();
 

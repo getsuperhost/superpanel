@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Hosting;
 using SuperPanel.WebAPI.Data;
 using SuperPanel.WebAPI.Models;
 
@@ -10,24 +11,32 @@ namespace SuperPanel.WebAPI.Services;
 
 public class BackupService : IBackupService
 {
-    private readonly IDbContextFactory<ApplicationDbContext> _contextFactory;
+    private readonly IDbContextFactory<ApplicationDbContext> _dbContextFactory;
     private readonly ILogger<BackupService> _logger;
     private readonly IConfiguration _configuration;
+    private readonly IHostEnvironment _environment;
+    private readonly string _backupPath;
 
     public BackupService(
-        IDbContextFactory<ApplicationDbContext> contextFactory,
+        IDbContextFactory<ApplicationDbContext> dbContextFactory,
         ILogger<BackupService> logger,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IHostEnvironment environment)
     {
-        _contextFactory = contextFactory;
+        _dbContextFactory = dbContextFactory;
         _logger = logger;
         _configuration = configuration;
+        _environment = environment;
+        
+        _backupPath = _environment.IsEnvironment("Testing") 
+            ? Path.Combine("/tmp/", "SuperPanel", "backups")
+            : "/var/backups/superpanel";
+        
+        _logger.LogInformation("BackupService created with environment: {Environment}", _environment.EnvironmentName);
     }
 
     public async Task<Backup> CreateBackupAsync(BackupRequest request, int userId)
     {
-        using var context = _contextFactory.CreateDbContext();
-        
         var backup = new Backup
         {
             Name = request.Name,
@@ -44,10 +53,12 @@ public class BackupService : IBackupService
             ExpiresAt = DateTime.UtcNow.AddDays(request.RetentionDays)
         };
 
+            await using var context = await _dbContextFactory.CreateDbContextAsync();
+            _logger.LogInformation("Created DbContext for CreateBackupAsync. Provider: {provider}; ContextHash: {hash}", context.Database.ProviderName, context.GetHashCode());
         context.Backups.Add(backup);
         await context.SaveChangesAsync();
 
-        // Start the backup process asynchronously
+        // Start the backup process asynchronously using a fresh DbContext
         _ = Task.Run(() => ExecuteBackupAsync(backup.Id));
 
         return backup;
@@ -55,8 +66,8 @@ public class BackupService : IBackupService
 
     public async Task<Backup?> GetBackupAsync(int id)
     {
-        using var context = _contextFactory.CreateDbContext();
-        
+          await using var context = await _dbContextFactory.CreateDbContextAsync();
+          _logger.LogInformation("Created DbContext for GetBackupAsync. Provider: {provider}; ContextHash: {hash}; BackupsCount: {count}", context.Database.ProviderName, context.GetHashCode(), await context.Backups.CountAsync());
         return await context.Backups
             .Include(b => b.Server)
             .Include(b => b.Database)
@@ -67,7 +78,8 @@ public class BackupService : IBackupService
 
     public async Task<IEnumerable<Backup>> GetBackupsAsync(int? serverId = null, int? databaseId = null, int? domainId = null)
     {
-        using var context = _contextFactory.CreateDbContext();
+            await using var context = await _dbContextFactory.CreateDbContextAsync();
+            _logger.LogInformation("Created DbContext for GetBackupsAsync. Provider: {provider}; ContextHash: {hash}; BackupsCount: {count}", context.Database.ProviderName, context.GetHashCode(), await context.Backups.CountAsync());
         var query = context.Backups
             .Include(b => b.Server)
             .Include(b => b.Database)
@@ -87,7 +99,7 @@ public class BackupService : IBackupService
 
     public async Task<bool> DeleteBackupAsync(int id)
     {
-        using var context = _contextFactory.CreateDbContext();
+        await using var context = await _dbContextFactory.CreateDbContextAsync();
         var backup = await context.Backups.FindAsync(id);
         if (backup == null)
             return false;
@@ -112,7 +124,6 @@ public class BackupService : IBackupService
 
     public async Task<RestoreResult> RestoreBackupAsync(int backupId, RestoreRequest request)
     {
-        using var context = _contextFactory.CreateDbContext();
         var backup = await GetBackupAsync(backupId);
         if (backup == null)
             throw new ArgumentException("Backup not found");
@@ -120,63 +131,96 @@ public class BackupService : IBackupService
         if (backup.Status != BackupStatus.Completed)
             throw new InvalidOperationException("Backup is not in completed state");
 
-        backup.Status = BackupStatus.Running;
-        backup.StartedAt = DateTime.UtcNow;
-        await context.SaveChangesAsync();
+        // Update status using a fresh context
+        await using (var context = await _dbContextFactory.CreateDbContextAsync())
+        {
+            var toUpdate = await context.Backups.FindAsync(backupId);
+            if (toUpdate == null) throw new ArgumentException("Backup not found");
+            toUpdate.Status = BackupStatus.Running;
+            toUpdate.StartedAt = DateTime.UtcNow;
+            await context.SaveChangesAsync();
+        }
 
         try
         {
-            var result = await ExecuteRestoreAsync(backup, request, context);
-            backup.Status = BackupStatus.Completed;
-            backup.CompletedAt = DateTime.UtcNow;
-            await context.SaveChangesAsync();
+            var result = await ExecuteRestoreAsync(backup, request);
+            // mark completed
+            await using (var context = await _dbContextFactory.CreateDbContextAsync())
+            {
+                var toUpdate = await context.Backups.FindAsync(backupId);
+                if (toUpdate != null)
+                {
+                    toUpdate.Status = BackupStatus.Completed;
+                    toUpdate.CompletedAt = DateTime.UtcNow;
+                    await context.SaveChangesAsync();
+                }
+            }
             return result;
         }
         catch (Exception ex)
         {
-            backup.Status = BackupStatus.Failed;
-            backup.ErrorMessage = ex.Message;
-            backup.CompletedAt = DateTime.UtcNow;
-            await context.SaveChangesAsync();
+            await using (var context = await _dbContextFactory.CreateDbContextAsync())
+            {
+                var toUpdate = await context.Backups.FindAsync(backupId);
+                if (toUpdate != null)
+                {
+                    toUpdate.Status = BackupStatus.Failed;
+                    toUpdate.ErrorMessage = ex.Message;
+                    toUpdate.CompletedAt = DateTime.UtcNow;
+                    await context.SaveChangesAsync();
+                }
+            }
             throw;
         }
     }
 
     private async Task ExecuteBackupAsync(int backupId)
     {
-        using var context = _contextFactory.CreateDbContext();
-        
+        // Use a fresh DbContext for background execution to avoid concurrent usage of a single DbContext
+        var context = await _dbContextFactory.CreateDbContextAsync();
+        _logger.LogInformation("Created DbContext for ExecuteBackupAsync. Provider: {provider}; ContextHash: {hash}; BackupsCountBefore: {count}", context.Database.ProviderName, context.GetHashCode(), await context.Backups.CountAsync());
         var backup = await context.Backups.FindAsync(backupId);
-        if (backup == null) return;
+        if (backup == null) 
+        {
+            context.Dispose();
+            return;
+        }
 
         try
         {
             backup.Status = BackupStatus.Running;
             backup.StartedAt = DateTime.UtcNow;
             await context.SaveChangesAsync();
+            context.Dispose();
 
-            await LogBackupAsync(backupId, "Info", "Starting backup process", context: context);
+            await LogBackupAsync(backupId, "Info", "Starting backup process");
 
-            string tempPath = Path.GetTempFileName();
+            // Use system temp directory for both testing and production to ensure write permissions
+            string tempBasePath = Path.GetTempPath();
+            _logger.LogInformation("Using tempBasePath: {TempBasePath}, IsTesting: {IsTesting}", tempBasePath, _environment.IsEnvironment("Testing"));
+            string superPanelTempDir = Path.Combine(tempBasePath, "SuperPanel");
+            Directory.CreateDirectory(superPanelTempDir);
+            string tempPath = Path.Combine(superPanelTempDir, Guid.NewGuid().ToString());
+            Directory.CreateDirectory(tempPath);
             string finalPath = GenerateBackupFilePath(backup);
 
             // Execute backup based on type
             switch (backup.Type)
             {
                 case BackupType.Database:
-                    await BackupDatabaseAsync(backup, tempPath, context);
+                    await BackupDatabaseAsync(backup, tempPath);
                     break;
                 case BackupType.Files:
                     await BackupFilesAsync(backup, tempPath);
                     break;
                 case BackupType.FullServer:
-                    await BackupFullServerAsync(backup, tempPath, context);
+                    await BackupFullServerAsync(backup, tempPath);
                     break;
                 case BackupType.Website:
-                    await BackupWebsiteAsync(backup, tempPath, context);
+                    await BackupWebsiteAsync(backup, tempPath);
                     break;
                 case BackupType.Email:
-                    await BackupEmailAsync(backup, tempPath, context);
+                    await BackupEmailAsync(backup, tempPath);
                     break;
                 default:
                     throw new NotSupportedException($"Backup type {backup.Type} is not supported");
@@ -185,17 +229,22 @@ public class BackupService : IBackupService
             // Compress if requested
             if (backup.IsCompressed)
             {
-                await LogBackupAsync(backupId, "Info", "Compressing backup", context: context);
+                await LogBackupAsync(backupId, "Info", "Compressing backup");
                 string compressedPath = tempPath + ".zip";
+
+                // Ensure the temp directory has proper permissions for reading
+                var tempDirInfo = new DirectoryInfo(tempPath);
+                tempDirInfo.Attributes &= ~FileAttributes.ReadOnly; // Remove read-only if set
+
                 ZipFile.CreateFromDirectory(tempPath, compressedPath);
-                File.Delete(tempPath);
+                Directory.Delete(tempPath, true);
                 tempPath = compressedPath;
             }
 
             // Encrypt if requested
             if (backup.IsEncrypted)
             {
-                await LogBackupAsync(backupId, "Info", "Encrypting backup", context: context);
+                await LogBackupAsync(backupId, "Info", "Encrypting backup");
                 string encryptedPath = tempPath + ".enc";
                 await EncryptFileAsync(tempPath, encryptedPath);
                 File.Delete(tempPath);
@@ -204,6 +253,15 @@ public class BackupService : IBackupService
 
             // Move to final location
             Directory.CreateDirectory(Path.GetDirectoryName(finalPath)!);
+            // Ensure final path doesn't exist (cleanup from previous test runs)
+            if (File.Exists(finalPath))
+            {
+                File.Delete(finalPath);
+            }
+            else if (Directory.Exists(finalPath))
+            {
+                Directory.Delete(finalPath, true);
+            }
             if (File.Exists(tempPath))
             {
                 File.Move(tempPath, finalPath);
@@ -215,37 +273,69 @@ public class BackupService : IBackupService
             }
 
             var fileInfo = new FileInfo(finalPath);
-            backup.FilePath = finalPath;
-            backup.FileSizeInBytes = fileInfo.Length;
-            backup.Status = BackupStatus.Completed;
-            backup.CompletedAt = DateTime.UtcNow;
-
-            await LogBackupAsync(backupId, "Info", $"Backup completed successfully. Size: {fileInfo.Length} bytes", context: context);
-            await context.SaveChangesAsync();
+            var finalContext = await _dbContextFactory.CreateDbContextAsync();
+            var backupToUpdate = await finalContext.Backups.FindAsync(backupId);
+            if (backupToUpdate != null)
+            {
+                backupToUpdate.FilePath = finalPath;
+                backupToUpdate.FileSizeInBytes = fileInfo.Length;
+                backupToUpdate.Status = BackupStatus.Completed;
+                backupToUpdate.CompletedAt = DateTime.UtcNow;
+                await finalContext.SaveChangesAsync();
+            }
+            finalContext.Dispose();
+            await LogBackupAsync(backupId, "Info", $"Backup completed successfully. Size: {fileInfo.Length} bytes");
         }
         catch (Exception ex)
         {
-            backup.Status = BackupStatus.Failed;
-            backup.ErrorMessage = ex.Message;
-            backup.CompletedAt = DateTime.UtcNow;
-            await LogBackupAsync(backupId, "Error", $"Backup failed: {ex.Message}", context: context);
-            await context.SaveChangesAsync();
+            var failedContext = await _dbContextFactory.CreateDbContextAsync();
+            var backupToFail = await failedContext.Backups.FindAsync(backupId);
+            if (backupToFail != null)
+            {
+                backupToFail.Status = BackupStatus.Failed;
+                backupToFail.ErrorMessage = ex.Message;
+                backupToFail.CompletedAt = DateTime.UtcNow;
+                await failedContext.SaveChangesAsync();
+            }
+            failedContext.Dispose();
+            await LogBackupAsync(backupId, "Error", $"Backup failed: {ex.Message}");
         }
     }
 
-    private async Task<RestoreResult> ExecuteRestoreAsync(Backup backup, RestoreRequest request, ApplicationDbContext context)
+    private async Task<RestoreResult> ExecuteRestoreAsync(Backup backup, RestoreRequest request)
     {
-        await LogBackupAsync(backup.Id, "Info", "Starting restore process", context: context);
+        await LogBackupAsync(backup.Id, "Info", "Starting restore process");
 
         string extractPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         long bytesRestored = 0;
 
         try
         {
+            // Diagnostic: log the file path and whether it exists before attempting to decompress
+            try
+            {
+                var exists = File.Exists(backup.FilePath);
+                string details;
+                if (exists)
+                {
+                    var fi = new FileInfo(backup.FilePath);
+                    details = $"Exists: true; Size: {fi.Length} bytes; LastWrite: {fi.LastWriteTimeUtc:O}; BackupStatus: {backup.Status}";
+                }
+                else
+                {
+                    details = "Exists: false";
+                }
+                await LogBackupAsync(backup.Id, "Info", $"Restore target file: {backup.FilePath}; {details}");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to log restore file existence for backup {BackupId}", backup.Id);
+            }
+
             // Decrypt if needed
             if (backup.IsEncrypted && File.Exists(backup.FilePath))
             {
-                await LogBackupAsync(backup.Id, "Info", "Decrypting backup", context: context);
+                await LogBackupAsync(backup.Id, "Info", "Decrypting backup");
                 string decryptedPath = Path.Combine(extractPath, "decrypted");
                 await DecryptFileAsync(backup.FilePath, decryptedPath);
                 // Replace the encrypted file path with decrypted path for further processing
@@ -255,7 +345,7 @@ public class BackupService : IBackupService
             // Decompress if needed
             if (backup.IsCompressed && File.Exists(backup.FilePath))
             {
-                await LogBackupAsync(backup.Id, "Info", "Decompressing backup", context: context);
+                await LogBackupAsync(backup.Id, "Info", "Decompressing backup");
                 ZipFile.ExtractToDirectory(backup.FilePath, extractPath);
             }
             else if (Directory.Exists(backup.FilePath))
@@ -285,7 +375,7 @@ public class BackupService : IBackupService
                     throw new NotSupportedException($"Restore type {backup.Type} is not supported");
             }
 
-            await LogBackupAsync(backup.Id, "Info", "Restore completed successfully", context: context);
+            await LogBackupAsync(backup.Id, "Info", "Restore completed successfully");
             return new RestoreResult
             {
                 Success = true,
@@ -295,7 +385,7 @@ public class BackupService : IBackupService
         }
         catch (Exception ex)
         {
-            await LogBackupAsync(backup.Id, "Error", $"Restore failed: {ex.Message}", context: context);
+            await LogBackupAsync(backup.Id, "Error", $"Restore failed: {ex.Message}");
             return new RestoreResult
             {
                 Success = false,
@@ -313,16 +403,17 @@ public class BackupService : IBackupService
         }
     }
 
-    private async Task BackupDatabaseAsync(Backup backup, string outputPath, ApplicationDbContext context)
+    private async Task BackupDatabaseAsync(Backup backup, string outputPath)
     {
         if (!backup.DatabaseId.HasValue)
             throw new InvalidOperationException("Database ID is required for database backup");
 
+        await using var context = await _dbContextFactory.CreateDbContextAsync();
         var database = await context.Databases.FindAsync(backup.DatabaseId.Value);
         if (database == null)
             throw new InvalidOperationException("Database not found");
 
-        await LogBackupAsync(backup.Id, "Info", $"Backing up database: {database.Name}", context: context);
+        await LogBackupAsync(backup.Id, "Info", $"Backing up database: {database.Name}");
 
         // This is a simplified implementation - in a real system you'd use database-specific tools
         string backupFile = Path.Combine(outputPath, $"{database.Name}_backup.sql");
@@ -357,16 +448,16 @@ public class BackupService : IBackupService
         }
     }
 
-    private async Task BackupFullServerAsync(Backup backup, string outputPath, ApplicationDbContext context)
+    private async Task BackupFullServerAsync(Backup backup, string outputPath)
     {
         if (!backup.ServerId.HasValue)
             throw new InvalidOperationException("Server ID is required for full server backup");
-
+        await using var context = await _dbContextFactory.CreateDbContextAsync();
         var server = await context.Servers.FindAsync(backup.ServerId.Value);
         if (server == null)
             throw new InvalidOperationException("Server not found");
 
-        await LogBackupAsync(backup.Id, "Info", $"Creating full backup of server: {server.Name}", context: context);
+        await LogBackupAsync(backup.Id, "Info", $"Creating full backup of server: {server.Name}");
 
         // Backup all server data (simplified implementation)
         var serverBackupPath = Path.Combine(outputPath, "server_backup");
@@ -376,7 +467,7 @@ public class BackupService : IBackupService
         var databases = await context.Databases.Where(d => d.ServerId == server.Id).ToListAsync();
         foreach (var db in databases)
         {
-            await LogBackupAsync(backup.Id, "Info", $"Backing up database: {db.Name}", context: context);
+            await LogBackupAsync(backup.Id, "Info", $"Backing up database: {db.Name}");
             // Database backup logic here
         }
 
@@ -384,21 +475,22 @@ public class BackupService : IBackupService
         var domains = await context.Domains.Where(d => d.ServerId == server.Id).ToListAsync();
         foreach (var domain in domains)
         {
-            await LogBackupAsync(backup.Id, "Info", $"Backing up website: {domain.Name}", context: context);
+            await LogBackupAsync(backup.Id, "Info", $"Backing up website: {domain.Name}");
             // Website backup logic here
         }
     }
 
-    private async Task BackupWebsiteAsync(Backup backup, string outputPath, ApplicationDbContext context)
+    private async Task BackupWebsiteAsync(Backup backup, string outputPath)
     {
         if (!backup.DomainId.HasValue)
             throw new InvalidOperationException("Domain ID is required for website backup");
 
+        await using var context = await _dbContextFactory.CreateDbContextAsync();
         var domain = await context.Domains.FindAsync(backup.DomainId.Value);
         if (domain == null)
             throw new InvalidOperationException("Domain not found");
 
-        await LogBackupAsync(backup.Id, "Info", $"Backing up website: {domain.Name}", context: context);
+        await LogBackupAsync(backup.Id, "Info", $"Backing up website: {domain.Name}");
 
         // Website backup logic (simplified)
         string websitePath = $"/var/www/{domain.Name}";
@@ -408,16 +500,16 @@ public class BackupService : IBackupService
         }
     }
 
-    private async Task BackupEmailAsync(Backup backup, string outputPath, ApplicationDbContext context)
+    private async Task BackupEmailAsync(Backup backup, string outputPath)
     {
         if (!backup.DomainId.HasValue)
             throw new InvalidOperationException("Domain ID is required for email backup");
-
+        await using var context = await _dbContextFactory.CreateDbContextAsync();
         var domain = await context.Domains.FindAsync(backup.DomainId.Value);
         if (domain == null)
             throw new InvalidOperationException("Domain not found");
 
-        await LogBackupAsync(backup.Id, "Info", $"Backing up email for domain: {domain.Name}", context: context);
+        await LogBackupAsync(backup.Id, "Info", $"Backing up email for domain: {domain.Name}");
 
         // Email backup logic (simplified)
         var emailAccounts = await context.EmailAccounts.Where(e => e.DomainId == domain.Id).ToListAsync();
@@ -484,7 +576,7 @@ public class BackupService : IBackupService
         return 0; // Placeholder - would return actual bytes restored
     }
 
-    private async Task LogBackupAsync(int backupId, string level, string message, string? details = null, ApplicationDbContext? context = null)
+    private async Task LogBackupAsync(int backupId, string level, string message, string? details = null)
     {
         var log = new BackupLog
         {
@@ -495,29 +587,19 @@ public class BackupService : IBackupService
             Timestamp = DateTime.UtcNow
         };
 
-        // Use provided context or create a new one
-        if (context != null)
-        {
-            context.BackupLogs.Add(log);
-            await context.SaveChangesAsync();
-        }
-        else
-        {
-            using var newContext = _contextFactory.CreateDbContext();
-            newContext.BackupLogs.Add(log);
-            await newContext.SaveChangesAsync();
-        }
+        await using var context = await _dbContextFactory.CreateDbContextAsync();
+        context.BackupLogs.Add(log);
+        await context.SaveChangesAsync();
 
         _logger.LogInformation($"Backup {backupId}: {message}");
     }
 
     private string GenerateBackupFilePath(Backup backup)
     {
-        string backupDir = _configuration["BackupSettings:BackupDirectory"] ?? "/var/backups/superpanel";
         string timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
         string extension = backup.IsCompressed ? ".zip" : ".bak";
 
-        return Path.Combine(backupDir, $"{backup.Type}_{backup.Id}_{timestamp}{extension}");
+        return Path.Combine(_backupPath, $"{backup.Type}_{backup.Id}_{timestamp}{extension}");
     }
 
     private void CopyDirectory(string sourceDir, string destinationDir)

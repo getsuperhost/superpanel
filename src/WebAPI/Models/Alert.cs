@@ -14,7 +14,7 @@ namespace SuperPanel.WebAPI.Models
         public string Name { get; set; }
 
         [StringLength(500)]
-        public string Description { get; set; }
+        public string? Description { get; set; }
 
         [Required]
         public AlertRuleType Type { get; set; }
@@ -22,16 +22,16 @@ namespace SuperPanel.WebAPI.Models
         // Multi-tenancy: Associate alert rule with user
         public int UserId { get; set; }
         [ForeignKey("UserId")]
-        public virtual User User { get; set; }
+        public virtual User? User { get; set; }
 
         // For server-specific rules
         public int? ServerId { get; set; }
         [ForeignKey("ServerId")]
-        public virtual Server Server { get; set; }
+        public virtual Server? Server { get; set; }
 
         // For metric-based rules
         [StringLength(50)]
-        public string MetricName { get; set; }
+        public string? MetricName { get; set; }
 
         [Required]
         [StringLength(2)]
@@ -56,13 +56,13 @@ namespace SuperPanel.WebAPI.Models
 
         // Notification settings
         [StringLength(500)]
-        public string WebhookUrl { get; set; }
+        public string? WebhookUrl { get; set; }
 
         [StringLength(1000)]
-        public string EmailRecipients { get; set; } // JSON array of emails
+        public string? EmailRecipients { get; set; } // JSON array of emails
 
         [StringLength(500)]
-        public string SlackWebhookUrl { get; set; }
+        public string? SlackWebhookUrl { get; set; }
 
         // Navigation properties
         public virtual ICollection<Alert> Alerts { get; set; } = new List<Alert>();
@@ -76,12 +76,12 @@ namespace SuperPanel.WebAPI.Models
         [Required]
         public int AlertRuleId { get; set; }
         [ForeignKey("AlertRuleId")]
-        public virtual AlertRule AlertRule { get; set; }
+        public virtual AlertRule? AlertRule { get; set; }
 
         [Required]
         public int ServerId { get; set; }
         [ForeignKey("ServerId")]
-        public virtual Server Server { get; set; }
+        public virtual Server? Server { get; set; }
 
         [Required]
         [StringLength(200)]
