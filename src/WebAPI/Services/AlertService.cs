@@ -74,6 +74,7 @@ namespace SuperPanel.WebAPI.Services
             var existingRule = await GetAlertRuleByIdAsync(id);
 
             existingRule.Name = updatedRule.Name;
+            existingRule.Type = updatedRule.Type;
             existingRule.Description = updatedRule.Description;
             existingRule.ServerId = updatedRule.ServerId;
             existingRule.MetricName = updatedRule.MetricName;
@@ -546,6 +547,16 @@ namespace SuperPanel.WebAPI.Services
         private async Task SendAlertNotificationsAsync(Alert alert)
         {
             var rule = alert.AlertRule;
+            if (rule == null)
+            {
+                // Load the alert rule if not already loaded
+                rule = await _context.AlertRules.FindAsync(alert.AlertRuleId);
+                if (rule == null)
+                {
+                    _logger.LogWarning("Alert rule {AlertRuleId} not found for alert {AlertId}", alert.AlertRuleId, alert.Id);
+                    return;
+                }
+            }
 
             // Webhook notification
             if (!string.IsNullOrEmpty(rule.WebhookUrl))
@@ -832,6 +843,7 @@ namespace SuperPanel.WebAPI.Services
         public async Task TestAlertRuleAsync(int alertRuleId)
         {
             var alertRule = await _context.AlertRules.FindAsync(alertRuleId);
+            if (alertRule == null)
             {
                 throw new KeyNotFoundException($"Alert rule with ID {alertRuleId} not found");
             }
