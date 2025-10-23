@@ -47,6 +47,7 @@ builder.Services.AddScoped<IBackupService, BackupService>();
 builder.Services.AddScoped<IAlertService, AlertService>();
 builder.Services.AddScoped<ISslCertificateService, SslCertificateService>();
 builder.Services.AddScoped<IEmailService, EmailService>();
+builder.Services.AddScoped<IDnsService, DnsService>();
 
 // Add HttpClient for notifications
 builder.Services.AddHttpClient();

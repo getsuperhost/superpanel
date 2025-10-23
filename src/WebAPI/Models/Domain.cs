@@ -29,6 +29,10 @@ public class Domain
     public DateTime? UpdatedAt { get; set; }
 
     public virtual ICollection<Subdomain> Subdomains { get; set; } = new List<Subdomain>();
+
+    public virtual ICollection<DnsRecord> DnsRecords { get; set; } = new List<DnsRecord>();
+    public virtual DnsZone? DnsZone { get; set; }
+    public virtual DnsPropagationStatus? DnsPropagationStatus { get; set; }
 }
 
 public class Subdomain
