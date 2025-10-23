@@ -21,17 +21,6 @@ using Xunit;
 namespace SuperPanel.WebAPI.Tests;
 
 /// <summary>
-/// Test web application factory for integration tests
-/// </summary>
-public class TestWebApplicationFactory : WebApplicationFactory<Program>
-{
-    protected override void ConfigureWebHost(IWebHostBuilder builder)
-    {
-        builder.UseEnvironment("Testing");
-    }
-}
-
-/// <summary>
 /// Integration tests for AuthController endpoints.
 /// Tests the full HTTP pipeline including authentication, routing, and database integration.
 /// </summary>
@@ -56,11 +45,12 @@ public class AuthControllerIntegrationTests : IClassFixture<TestWebApplicationFa
     [Fact]
     public async Task Register_WithValidData_ShouldReturnOkWithToken()
     {
-        // Arrange
+        // Arrange - use unique username/email to avoid collisions with seeded test user
+        var unique = Guid.NewGuid().ToString("N").Substring(0, 8);
         var registerRequest = new RegisterRequest
         {
-            Username = "testuser",
-            Email = "test@example.com",
+            Username = $"testuser_{unique}",
+            Email = $"test_{unique}@example.com",
             Password = "TestPass123!",
             Role = "User"
         };
@@ -75,8 +65,8 @@ public class AuthControllerIntegrationTests : IClassFixture<TestWebApplicationFa
         content.Should().NotBeNull();
         content!.Token.Should().NotBeNullOrEmpty();
         content.User.Should().NotBeNull();
-        content.User.Username.Should().Be("testuser");
-        content.User.Email.Should().Be("test@example.com");
+        content.User.Username.Should().Be(registerRequest.Username);
+        content.User.Email.Should().Be(registerRequest.Email);
         content.User.Role.Should().Be("User");
     }
 
@@ -91,7 +81,8 @@ public class AuthControllerIntegrationTests : IClassFixture<TestWebApplicationFa
             Password = "TestPass123!",
             Role = "User"
         };
-        await _client.PostAsJsonAsync("/api/auth/register", registerRequest);
+        var firstResponse = await _client.PostAsJsonAsync("/api/auth/register", registerRequest);
+        firstResponse.StatusCode.Should().Be(HttpStatusCode.OK, "First registration should succeed");
 
         var duplicateRequest = new RegisterRequest
         {
@@ -103,9 +94,10 @@ public class AuthControllerIntegrationTests : IClassFixture<TestWebApplicationFa
 
         // Act
         var response = await _client.PostAsJsonAsync("/api/auth/register", duplicateRequest);
+        var content = await response.Content.ReadAsStringAsync();
 
         // Assert
-        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, $"Expected BadRequest but got {response.StatusCode}. Response content: {content}");
     }
 
     [Fact]
@@ -119,7 +111,8 @@ public class AuthControllerIntegrationTests : IClassFixture<TestWebApplicationFa
             Password = "TestPass123!",
             Role = "User"
         };
-        await _client.PostAsJsonAsync("/api/auth/register", registerRequest);
+        var firstResponse = await _client.PostAsJsonAsync("/api/auth/register", registerRequest);
+        firstResponse.StatusCode.Should().Be(HttpStatusCode.OK, "First registration should succeed");
 
         var duplicateRequest = new RegisterRequest
         {
@@ -131,9 +124,10 @@ public class AuthControllerIntegrationTests : IClassFixture<TestWebApplicationFa
 
         // Act
         var response = await _client.PostAsJsonAsync("/api/auth/register", duplicateRequest);
+        var content = await response.Content.ReadAsStringAsync();
 
         // Assert
-        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, $"Expected BadRequest but got {response.StatusCode}. Response content: {content}");
     }
 
     [Fact]

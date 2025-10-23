@@ -105,7 +105,7 @@ public class DatabasesControllerIntegrationTests : IClassFixture<DatabasesTestWe
         var server = new Server
         {
             Name = "Test Server",
-            IpAddress = "192.168.1.100",
+            IpAddress = "ip-" + Guid.NewGuid().ToString("N").Substring(0, 12),
             Status = ServerStatus.Online,
             UserId = userId
         };

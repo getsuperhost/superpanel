@@ -42,8 +42,8 @@ public class AuthServiceTests : IDisposable
     public async Task RegisterAsync_WithValidData_ShouldCreateUser()
     {
         // Arrange
-        var username = "testuser";
-        var email = "test@example.com";
+        var username = TestHelpers.GenerateUniqueUsername();
+        var email = TestHelpers.GenerateUniqueEmail();
         var password = "TestPassword123!";
         var role = "User";
 
@@ -69,9 +69,9 @@ public class AuthServiceTests : IDisposable
     public async Task RegisterAsync_WithDuplicateUsername_ShouldThrowException()
     {
         // Arrange
-        var username = "testuser";
-        var email1 = "test1@example.com";
-        var email2 = "test2@example.com";
+        var username = TestHelpers.GenerateUniqueUsername();
+        var email1 = TestHelpers.GenerateUniqueEmail();
+        var email2 = TestHelpers.GenerateUniqueEmail();
         var password = "TestPassword123!";
 
         await _authService.RegisterAsync(username, email1, password);
@@ -85,9 +85,9 @@ public class AuthServiceTests : IDisposable
     public async Task RegisterAsync_WithDuplicateEmail_ShouldThrowException()
     {
         // Arrange
-        var username1 = "testuser1";
-        var username2 = "testuser2";
-        var email = "test@example.com";
+        var username1 = TestHelpers.GenerateUniqueUsername();
+        var username2 = TestHelpers.GenerateUniqueUsername();
+        var email = TestHelpers.GenerateUniqueEmail();
         var password = "TestPassword123!";
 
         await _authService.RegisterAsync(username1, email, password);
@@ -118,8 +118,8 @@ public class AuthServiceTests : IDisposable
     public async Task AuthenticateAsync_WithValidCredentials_ShouldReturnUser()
     {
         // Arrange
-        var username = "testuser";
-        var email = "test@example.com";
+        var username = TestHelpers.GenerateUniqueUsername();
+        var email = TestHelpers.GenerateUniqueEmail();
         var password = "TestPassword123!";
 
         var registeredUser = await _authService.RegisterAsync(username, email, password);
@@ -139,8 +139,8 @@ public class AuthServiceTests : IDisposable
     public async Task AuthenticateAsync_WithInvalidPassword_ShouldReturnNull()
     {
         // Arrange
-        var username = "testuser";
-        var email = "test@example.com";
+        var username = TestHelpers.GenerateUniqueUsername();
+        var email = TestHelpers.GenerateUniqueEmail();
         var password = "TestPassword123!";
         var wrongPassword = "WrongPassword123!";
 
@@ -167,8 +167,8 @@ public class AuthServiceTests : IDisposable
     public async Task AuthenticateAsync_WithInactiveUser_ShouldReturnNull()
     {
         // Arrange
-        var username = "testuser";
-        var email = "test@example.com";
+        var username = TestHelpers.GenerateUniqueUsername();
+        var email = TestHelpers.GenerateUniqueEmail();
         var password = "TestPassword123!";
 
         var user = await _authService.RegisterAsync(username, email, password);
@@ -186,8 +186,8 @@ public class AuthServiceTests : IDisposable
     public async Task UserExistsAsync_WithExistingUsername_ShouldReturnTrue()
     {
         // Arrange
-        var username = "testuser";
-        var email = "test@example.com";
+        var username = TestHelpers.GenerateUniqueUsername();
+        var email = TestHelpers.GenerateUniqueEmail();
         var password = "TestPassword123!";
 
         await _authService.RegisterAsync(username, email, password);
@@ -203,8 +203,8 @@ public class AuthServiceTests : IDisposable
     public async Task UserExistsAsync_WithExistingEmail_ShouldReturnTrue()
     {
         // Arrange
-        var username = "testuser";
-        var email = "test@example.com";
+        var username = TestHelpers.GenerateUniqueUsername();
+        var email = TestHelpers.GenerateUniqueEmail();
         var password = "TestPassword123!";
 
         await _authService.RegisterAsync(username, email, password);
@@ -230,11 +230,13 @@ public class AuthServiceTests : IDisposable
     public void GenerateJwtToken_ShouldReturnValidToken()
     {
         // Arrange
+        var username = TestHelpers.GenerateUniqueUsername();
+        var email = TestHelpers.GenerateUniqueEmail();
         var user = new User
         {
             Id = 1,
-            Username = "testuser",
-            Email = "test@example.com",
+            Username = username,
+            Email = email,
             Role = "User",
             PasswordHash = "hash",
             PasswordSalt = "salt",
@@ -253,8 +255,8 @@ public class AuthServiceTests : IDisposable
         var jwtToken = handler.ReadJwtToken(token);
 
         jwtToken.Claims.Should().Contain(c => c.Type == "nameid" && c.Value == "1");
-        jwtToken.Claims.Should().Contain(c => c.Type == "unique_name" && c.Value == "testuser");
-        jwtToken.Claims.Should().Contain(c => c.Type == "email" && c.Value == "test@example.com");
+        jwtToken.Claims.Should().Contain(c => c.Type == "unique_name" && c.Value == user.Username);
+        jwtToken.Claims.Should().Contain(c => c.Type == "email" && c.Value == user.Email);
         jwtToken.Claims.Should().Contain(c => c.Type == "role" && c.Value == "User");
         jwtToken.Issuer.Should().Be("SuperPanel");
         jwtToken.Audiences.Should().Contain("SuperPanelUsers");
@@ -264,11 +266,13 @@ public class AuthServiceTests : IDisposable
     public void GenerateJwtToken_ForAdminUser_ShouldIncludeAdminRole()
     {
         // Arrange
+        var username = TestHelpers.GenerateUniqueUsername();
+        var email = TestHelpers.GenerateUniqueEmail();
         var user = new User
         {
             Id = 1,
-            Username = "admin",
-            Email = "admin@example.com",
+            Username = username,
+            Email = email,
             Role = "Administrator",
             PasswordHash = "hash",
             PasswordSalt = "salt",
@@ -349,8 +353,8 @@ public class AuthServiceTests : IDisposable
     public async Task AuthenticateAsync_ShouldUpdateLastLoginTime()
     {
         // Arrange
-        var username = "testuser";
-        var email = "test@example.com";
+        var username = TestHelpers.GenerateUniqueUsername();
+        var email = TestHelpers.GenerateUniqueEmail();
         var password = "TestPassword123!";
 
         var user = await _authService.RegisterAsync(username, email, password);
@@ -372,9 +376,15 @@ public class AuthServiceTests : IDisposable
     public async Task RegisterAsync_MultipleUsers_ShouldAssignUniqueIds()
     {
         // Arrange & Act
-        var user1 = await _authService.RegisterAsync("user1", "user1@example.com", "Password1!");
-        var user2 = await _authService.RegisterAsync("user2", "user2@example.com", "Password2!");
-        var user3 = await _authService.RegisterAsync("user3", "user3@example.com", "Password3!");
+        var username1 = TestHelpers.GenerateUniqueUsername();
+        var username2 = TestHelpers.GenerateUniqueUsername();
+        var username3 = TestHelpers.GenerateUniqueUsername();
+        var email1 = TestHelpers.GenerateUniqueEmail();
+        var email2 = TestHelpers.GenerateUniqueEmail();
+        var email3 = TestHelpers.GenerateUniqueEmail();
+        var user1 = await _authService.RegisterAsync(username1, email1, "Password1!");
+        var user2 = await _authService.RegisterAsync(username2, email2, "Password2!");
+        var user3 = await _authService.RegisterAsync(username3, email3, "Password3!");
 
         // Assert
         user1.Id.Should().NotBe(user2.Id);

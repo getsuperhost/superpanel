@@ -48,7 +48,7 @@ public class AlertServiceTests : IDisposable
         {
             Id = 1,
             Name = "Test Server",
-            IpAddress = "192.168.1.100",
+            IpAddress = "ip-" + Guid.NewGuid().ToString("N").Substring(0, 12),
             Description = "Test server",
             OperatingSystem = "Ubuntu 22.04",
             Status = ServerStatus.Online,

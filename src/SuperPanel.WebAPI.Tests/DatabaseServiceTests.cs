@@ -33,7 +33,7 @@ public class DatabaseServiceTests : IDisposable
         {
             Id = 1,
             Name = "Production Server",
-            IpAddress = "192.168.1.100",
+            IpAddress = "ip-" + Guid.NewGuid().ToString("N").Substring(0, 12),
             Description = "Main production server",
             OperatingSystem = "Ubuntu 22.04",
             Status = ServerStatus.Online,
@@ -45,7 +45,7 @@ public class DatabaseServiceTests : IDisposable
         {
             Id = 2,
             Name = "Development Server",
-            IpAddress = "192.168.1.101",
+            IpAddress = "ip-" + Guid.NewGuid().ToString("N").Substring(0, 12),
             Description = "Development environment",
             OperatingSystem = "Windows Server 2022",
             Status = ServerStatus.Online,

@@ -1,6 +1,7 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Moq;
 using SuperPanel.WebAPI.Data;
@@ -13,9 +14,10 @@ namespace SuperPanel.WebAPI.Tests;
 public class BackupServiceTests : IDisposable
 {
     private readonly ApplicationDbContext _context;
+    private readonly IDbContextFactory<SuperPanel.WebAPI.Data.ApplicationDbContext> _dbContextFactory;
     private readonly Mock<ILogger<BackupService>> _loggerMock;
     private readonly Mock<IConfiguration> _configurationMock;
-    private readonly Mock<IDbContextFactory<ApplicationDbContext>> _contextFactoryMock;
+    private readonly Mock<IHostEnvironment> _hostEnvironmentMock;
     private readonly BackupService _backupService;
     private readonly string _databaseName;
 
@@ -26,19 +28,20 @@ public class BackupServiceTests : IDisposable
             .UseInMemoryDatabase(databaseName: _databaseName)
             .Options;
 
-        _context = new ApplicationDbContext(options);
+    _context = new ApplicationDbContext(options);
+    _dbContextFactory = new SimpleDbContextFactory(options);
         _loggerMock = new Mock<ILogger<BackupService>>();
         _configurationMock = new Mock<IConfiguration>();
-        _contextFactoryMock = new Mock<IDbContextFactory<ApplicationDbContext>>();
-
-        // Setup the factory mock to return new context instances with the same options
-        _contextFactoryMock.Setup(f => f.CreateDbContext()).Returns(() => new ApplicationDbContext(options));
+        _hostEnvironmentMock = new Mock<IHostEnvironment>();
 
         // Setup configuration mock
         _configurationMock.Setup(c => c["BackupSettings:BackupDirectory"])
             .Returns("/tmp/backups");
 
-        _backupService = new BackupService(_contextFactoryMock.Object, _loggerMock.Object, _configurationMock.Object);
+        // Setup host environment mock for testing
+        _hostEnvironmentMock.Setup(h => h.EnvironmentName).Returns("Testing");
+
+    _backupService = new BackupService(_dbContextFactory, _loggerMock.Object, _configurationMock.Object, _hostEnvironmentMock.Object);
 
         // Seed test data
         SeedTestData();
@@ -50,7 +53,7 @@ public class BackupServiceTests : IDisposable
         {
             Id = 1,
             Name = "Test Server",
-            IpAddress = "192.168.1.100",
+            IpAddress = "ip-" + Guid.NewGuid().ToString("N").Substring(0, 12),
             Description = "Test server",
             OperatingSystem = "Ubuntu 22.04",
             Status = ServerStatus.Online,
@@ -288,5 +291,26 @@ public class BackupServiceTests : IDisposable
     public void Dispose()
     {
         _context.Dispose();
+    }
+}
+
+// Simple factory to satisfy IDbContextFactory for tests
+public class SimpleDbContextFactory : IDbContextFactory<SuperPanel.WebAPI.Data.ApplicationDbContext>
+{
+    private readonly DbContextOptions<SuperPanel.WebAPI.Data.ApplicationDbContext> _options;
+
+    public SimpleDbContextFactory(DbContextOptions<SuperPanel.WebAPI.Data.ApplicationDbContext> options)
+    {
+        _options = options;
+    }
+
+    public SuperPanel.WebAPI.Data.ApplicationDbContext CreateDbContext()
+    {
+        return new SuperPanel.WebAPI.Data.ApplicationDbContext(_options);
+    }
+
+    public ValueTask<SuperPanel.WebAPI.Data.ApplicationDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default)
+    {
+        return new ValueTask<SuperPanel.WebAPI.Data.ApplicationDbContext>(CreateDbContext());
     }
 }
