@@ -35,7 +35,7 @@ import {
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { domainApi, serverApi } from '../services/api';
-import { Domain, Server, DomainStatus, DnsRecord, DnsRecordType, DnsRecordStatus } from '../types/domains';
+import { Domain, Server, DomainStatus, DnsRecord, DnsRecordType, DnsRecordStatus, DnsPropagationStatus } from '../types/domains';
 
 const { Title } = Typography;
 
@@ -59,9 +59,18 @@ const Domains: React.FC = () => {
   const [zoneFile, setZoneFile] = useState<string>('');
   const [zoneFileLoading, setZoneFileLoading] = useState(false);
 
+  // DNS Propagation state
+  const [propagationStatus, setPropagationStatus] = useState<DnsPropagationStatus | null>(null);
+  const [propagationLoading, setPropagationLoading] = useState(false);
+
+  // DNS status tracking for main table
+  const [dnsStatusMap, setDnsStatusMap] = useState<Record<number, { recordCount: number; propagationStatus: DnsPropagationStatus | null; error?: boolean }>>({});
+  const [dnsStatusLoading, setDnsStatusLoading] = useState<Record<number, boolean>>({});
+
   // Load domains and servers on component mount
   useEffect(() => {
     loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const loadData = async () => {
@@ -77,6 +86,11 @@ const Domains: React.FC = () => {
 
       setDomains(domainsData);
       setServers(serversData);
+
+      // Load DNS status for all domains
+      if (domainsData.length > 0) {
+        await loadDnsStatusForAllDomains(domainsData);
+      }
     } catch (err) {
       console.error('Failed to load data:', err);
       setError(err instanceof Error ? err.message : 'Failed to load domains');
@@ -105,6 +119,72 @@ const Domains: React.FC = () => {
       message.error('Failed to load zone file');
     } finally {
       setZoneFileLoading(false);
+    }
+  };
+
+  const loadPropagationStatus = async (domainId: number) => {
+    try {
+      setPropagationLoading(true);
+      const status = await domainApi.getDnsPropagationStatus(domainId);
+      setPropagationStatus(status);
+    } catch (err) {
+      console.error('Failed to load propagation status:', err);
+      message.error('Failed to load propagation status');
+    } finally {
+      setPropagationLoading(false);
+    }
+  };
+
+  const checkPropagation = async (domainId: number) => {
+    try {
+      setPropagationLoading(true);
+      await domainApi.checkDnsPropagation(domainId);
+      message.success('Propagation check initiated');
+      // Reload status after a short delay
+      setTimeout(() => loadPropagationStatus(domainId), 2000);
+    } catch (err) {
+      console.error('Failed to check propagation:', err);
+      message.error('Failed to check propagation');
+    } finally {
+      setPropagationLoading(false);
+    }
+  };
+
+  const loadDnsStatusForDomain = async (domainId: number) => {
+    try {
+      setDnsStatusLoading(prev => ({ ...prev, [domainId]: true }));
+      const records = await domainApi.getDnsRecords(domainId);
+      const propagationStatus = await domainApi.getDnsPropagationStatus(domainId);
+      
+      setDnsStatusMap(prev => ({
+        ...prev,
+        [domainId]: {
+          recordCount: records.length,
+          propagationStatus: propagationStatus
+        }
+      }));
+    } catch (err) {
+      console.error('Failed to load DNS status for domain:', err);
+      // Set error state
+      setDnsStatusMap(prev => ({
+        ...prev,
+        [domainId]: {
+          recordCount: 0,
+          propagationStatus: null,
+          error: true
+        }
+      }));
+    } finally {
+      setDnsStatusLoading(prev => ({ ...prev, [domainId]: false }));
+    }
+  };
+
+  const loadDnsStatusForAllDomains = async (domains: Domain[]) => {
+    // Load DNS status for all domains with concurrency control
+    const concurrencyLimit = 5; // Load 5 domains at a time
+    for (let i = 0; i < domains.length; i += concurrencyLimit) {
+      const batch = domains.slice(i, i + concurrencyLimit);
+      await Promise.all(batch.map(domain => loadDnsStatusForDomain(domain.id)));
     }
   };
 
@@ -141,6 +221,7 @@ const Domains: React.FC = () => {
   const handleManageDns = (domain: Domain) => {
     setSelectedDomain(domain);
     loadDnsRecords(domain.id);
+    loadPropagationStatus(domain.id);
     setDnsModalVisible(true);
   };
 
@@ -244,14 +325,34 @@ const Domains: React.FC = () => {
       title: 'Domain Name',
       dataIndex: 'name',
       key: 'name',
-      render: (name: string) => (
-        <Space>
-          <GlobalOutlined style={{ color: '#1890ff' }} />
-          <a href={`http://${name}`} target="_blank" rel="noopener noreferrer">
-            {name}
-          </a>
-        </Space>
-      ),
+      render: (name: string, record: Domain) => {
+        const dnsStatus = dnsStatusMap[record.id];
+        const hasDnsIssues = dnsStatus?.propagationStatus?.overallStatus === 'error';
+        const isPropagating = dnsStatus?.propagationStatus?.overallStatus === 'propagating';
+        
+        return (
+          <Space>
+            <Space>
+              {dnsStatus && (
+                <Tooltip title={`DNS: ${dnsStatus.recordCount} records, ${dnsStatus.propagationStatus?.overallStatus || 'unknown'}`}>
+                  <Badge
+                    status={
+                      hasDnsIssues ? 'error' :
+                      isPropagating ? 'processing' :
+                      dnsStatus.propagationStatus?.overallStatus === 'propagated' ? 'success' : 'default'
+                    }
+                    style={{ marginRight: 4 }}
+                  />
+                </Tooltip>
+              )}
+              <GlobalOutlined style={{ color: '#1890ff' }} />
+            </Space>
+            <a href={`http://${name}`} target="_blank" rel="noopener noreferrer">
+              {name}
+            </a>
+          </Space>
+        );
+      },
       sorter: (a, b) => a.name.localeCompare(b.name),
     },
     {
@@ -300,6 +401,49 @@ const Domains: React.FC = () => {
       },
     },
     {
+      title: 'DNS Status',
+      key: 'dnsStatus',
+      render: (_, record: Domain) => {
+        const dnsStatus = dnsStatusMap[record.id];
+        const isLoading = dnsStatusLoading[record.id];
+        
+        if (isLoading) {
+          return <Spin size="small" />;
+        }
+        
+        if (!dnsStatus || dnsStatus.error) {
+          return (
+            <Button
+              type="link"
+              size="small"
+              onClick={() => loadDnsStatusForDomain(record.id)}
+              style={{ padding: 0 }}
+            >
+              Load DNS Status
+            </Button>
+          );
+        }
+        
+        const propagationColor =
+          dnsStatus.propagationStatus?.overallStatus === 'propagated' ? 'green' :
+          dnsStatus.propagationStatus?.overallStatus === 'propagating' ? 'orange' : 'red';
+        
+        return (
+          <Space direction="vertical" size={0}>
+            <div>
+              <GlobalOutlined style={{ marginRight: 4 }} />
+              {dnsStatus.recordCount} records
+            </div>
+            {dnsStatus.propagationStatus && (
+              <Tag color={propagationColor}>
+                {dnsStatus.propagationStatus.overallStatus}
+              </Tag>
+            )}
+          </Space>
+        );
+      },
+    },
+    {
       title: 'Document Root',
       dataIndex: 'documentRoot',
       key: 'documentRoot',
@@ -325,9 +469,14 @@ const Domains: React.FC = () => {
               onClick={() => handleEditDomain(record)}
             />
           </Tooltip>
-          <Tooltip title="Manage DNS Records">
+          <Tooltip title={
+            dnsStatusMap[record.id] 
+              ? `Manage DNS Records (${dnsStatusMap[record.id].recordCount} records, ${dnsStatusMap[record.id].propagationStatus?.overallStatus || 'unknown'})`
+              : 'Manage DNS Records'
+          }>
             <Button
-              type="text"
+              type={dnsStatusMap[record.id]?.propagationStatus?.overallStatus === 'error' ? 'primary' : 'text'}
+              danger={dnsStatusMap[record.id]?.propagationStatus?.overallStatus === 'error'}
               icon={<GlobalOutlined />}
               onClick={() => handleManageDns(record)}
             />
@@ -398,7 +547,7 @@ const Domains: React.FC = () => {
 
       {/* Domain Statistics */}
       <Row gutter={[16, 16]} style={{ marginBottom: '24px' }}>
-        <Col xs={24} sm={8}>
+        <Col xs={24} sm={6}>
           <Card>
             <Statistic
               title="Total Domains"
@@ -408,7 +557,7 @@ const Domains: React.FC = () => {
             />
           </Card>
         </Col>
-        <Col xs={24} sm={8}>
+        <Col xs={24} sm={6}>
           <Card>
             <Statistic
               title="Active Domains"
@@ -418,7 +567,7 @@ const Domains: React.FC = () => {
             />
           </Card>
         </Col>
-        <Col xs={24} sm={8}>
+        <Col xs={24} sm={6}>
           <Card>
             <Statistic
               title="SSL Certificates"
@@ -429,6 +578,21 @@ const Domains: React.FC = () => {
             {expiringSoonDomains.length > 0 && (
               <div style={{ fontSize: '12px', color: '#fa8c16', marginTop: '4px' }}>
                 {expiringSoonDomains.length} expiring soon
+              </div>
+            )}
+          </Card>
+        </Col>
+        <Col xs={24} sm={6}>
+          <Card>
+            <Statistic
+              title="DNS Records"
+              value={Object.values(dnsStatusMap).reduce((sum, status) => sum + (status.recordCount || 0), 0)}
+              prefix={<SettingOutlined />}
+              valueStyle={{ color: '#13c2c2' }}
+            />
+            {Object.values(dnsStatusMap).filter(status => status.propagationStatus?.overallStatus === 'error').length > 0 && (
+              <div style={{ fontSize: '12px', color: '#f5222d', marginTop: '4px' }}>
+                {Object.values(dnsStatusMap).filter(status => status.propagationStatus?.overallStatus === 'error').length} propagation issues
               </div>
             )}
           </Card>
@@ -688,6 +852,126 @@ const Domains: React.FC = () => {
               rows={20}
               style={{ fontFamily: 'monospace' }}
             />
+          </Tabs.TabPane>
+          <Tabs.TabPane tab="Propagation Monitoring" key="4">
+            <div style={{ marginBottom: 16 }}>
+              <Space>
+                <Button
+                  type="primary"
+                  onClick={() => selectedDomain && loadPropagationStatus(selectedDomain.id)}
+                  loading={propagationLoading}
+                  icon={<ReloadOutlined />}
+                >
+                  Refresh Status
+                </Button>
+                <Button
+                  onClick={() => selectedDomain && checkPropagation(selectedDomain.id)}
+                  loading={propagationLoading}
+                  icon={<CheckCircleOutlined />}
+                >
+                  Check Propagation
+                </Button>
+              </Space>
+            </div>
+
+            {propagationStatus ? (
+              <div>
+                <div style={{ marginBottom: 16 }}>
+                  <Card size="small">
+                    <Space direction="vertical" size="small">
+                      <div>
+                        <Typography.Text strong>Domain:</Typography.Text> {propagationStatus.domainName}
+                      </div>
+                      <div>
+                        <Typography.Text strong>Overall Status:</Typography.Text>{' '}
+                        <Tag color={
+                          propagationStatus.overallStatus === 'propagated' ? 'green' :
+                          propagationStatus.overallStatus === 'propagating' ? 'orange' : 'red'
+                        }>
+                          {propagationStatus.overallStatus.toUpperCase()}
+                        </Tag>
+                      </div>
+                      <div>
+                        <Typography.Text strong>Last Checked:</Typography.Text> {new Date(propagationStatus.lastChecked).toLocaleString()}
+                      </div>
+                      <div>
+                        <Typography.Text strong>Nameservers:</Typography.Text>
+                        <ul style={{ margin: 0, paddingLeft: 20 }}>
+                          {propagationStatus.nameservers.map((ns, index) => (
+                            <li key={index}>{ns}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    </Space>
+                  </Card>
+                </div>
+
+                <Table
+                  columns={[
+                    {
+                      title: 'Type',
+                      dataIndex: 'type',
+                      key: 'type',
+                      render: (type: DnsRecordType) => (
+                        <Tag color="blue">{DnsRecordType[type]}</Tag>
+                      ),
+                    },
+                    {
+                      title: 'Name',
+                      dataIndex: 'name',
+                      key: 'name',
+                    },
+                    {
+                      title: 'Expected Value',
+                      dataIndex: 'expectedValue',
+                      key: 'expectedValue',
+                    },
+                    {
+                      title: 'Actual Values',
+                      dataIndex: 'actualValues',
+                      key: 'actualValues',
+                      render: (values: string[]) => (
+                        <div>
+                          {values.length > 0 ? (
+                            <ul style={{ margin: 0, paddingLeft: 20 }}>
+                              {values.map((value, index) => (
+                                <li key={index}>{value}</li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <Typography.Text type="secondary">No values found</Typography.Text>
+                          )}
+                        </div>
+                      ),
+                    },
+                    {
+                      title: 'Status',
+                      dataIndex: 'isPropagated',
+                      key: 'isPropagated',
+                      render: (isPropagated: boolean) => (
+                        <Tag color={isPropagated ? 'green' : 'orange'}>
+                          {isPropagated ? 'Propagated' : 'Propagating'}
+                        </Tag>
+                      ),
+                    },
+                    {
+                      title: 'Last Checked',
+                      dataIndex: 'lastChecked',
+                      key: 'lastChecked',
+                      render: (lastChecked: string) => new Date(lastChecked).toLocaleString(),
+                    },
+                  ]}
+                  dataSource={propagationStatus.records}
+                  rowKey={(record, index) => `${record.type}-${record.name}-${index}`}
+                  pagination={false}
+                  size="small"
+                />
+              </div>
+            ) : (
+              <div style={{ textAlign: 'center', padding: '40px' }}>
+                <Typography.Text type="secondary">No propagation data available. Click "Refresh Status" to load current propagation information.</Typography.Text>
+              </div>
+            )}
           </Tabs.TabPane>
         </Tabs>
 

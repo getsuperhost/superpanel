@@ -5,6 +5,10 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using SuperPanel.WebAPI.Data;
 using SuperPanel.WebAPI.Models;
+using Certes;
+using Certes.Acme;
+using Certes.Acme.Resource;
+using System.Security.Cryptography.X509Certificates;
 
 namespace SuperPanel.WebAPI.Services;
 
@@ -142,48 +146,238 @@ public class SslCertificateService : ISslCertificateService
 
     private async Task<bool> RequestLetsEncryptCertificateAsync(SslCertificate certificate)
     {
-        // This is a simplified implementation. In production, you'd use:
-        // - ACME protocol implementation (like Certes or ACMESharp)
-        // - Proper challenge validation (HTTP-01 or DNS-01)
-        // - Certificate storage and installation
+        try
+        {
+            _logger.LogInformation("Requesting Let's Encrypt certificate for {Domain}", certificate.DomainName);
 
-        _logger.LogInformation("Requesting Let's Encrypt certificate for {Domain}", certificate.DomainName);
+            // Get ACME settings from configuration
+            var acmeEmail = _configuration["SslSettings:AcmeSettings:Email"];
+            var useStaging = _configuration.GetValue<bool>("SslSettings:AcmeSettings:Staging", true);
+            var challengePath = _configuration["SslSettings:AcmeSettings:ChallengePath"] ?? "/var/www/.well-known/acme-challenge";
 
-        // Simulate certificate request process
-        await Task.Delay(2000); // Simulate network delay
+            if (string.IsNullOrEmpty(acmeEmail))
+            {
+                throw new InvalidOperationException("ACME email not configured in SslSettings:AcmeSettings:Email");
+            }
 
-        // For demo purposes, we'll simulate success
-        // In real implementation, this would involve:
-        // 1. Register ACME account
-        // 2. Create certificate order
-        // 3. Complete domain validation challenges
-        // 4. Download certificate
+            // Create ACME context
+            var acme = new AcmeContext(useStaging ? WellKnownServers.LetsEncryptStagingV2 : WellKnownServers.LetsEncryptV2);
 
-        certificate.Status = SslCertificateStatus.Pending;
-        certificate.Notes = "Let's Encrypt certificate request initiated. Awaiting validation.";
-        await _context.SaveChangesAsync();
+            // Create or load account
+            var account = await acme.NewAccount(acmeEmail, true);
 
-        // In a real implementation, you'd queue this for background processing
-        // and update status when complete
-        _ = Task.Run(() => ProcessLetsEncryptCertificateAsync(certificate.Id));
+            // Create certificate order
+            var order = await acme.NewOrder(new[] { certificate.DomainName });
 
-        return true;
+            // Get authorization for the domain
+            var authz = (await order.Authorizations()).First();
+            var challenge = await authz.Http();
+
+            // Create challenge directory
+            System.IO.Directory.CreateDirectory(challengePath);
+
+            // Write challenge token to file
+            var challengeFile = Path.Combine(challengePath, challenge.Token);
+            await File.WriteAllTextAsync(challengeFile, challenge.KeyAuthz);
+
+            // Validate the challenge
+            var challengeResult = await challenge.Validate();
+
+            // Wait for validation to complete
+            var retryCount = 0;
+            while (challengeResult.Status == ChallengeStatus.Pending && retryCount < 30)
+            {
+                await Task.Delay(2000);
+                challengeResult = await challenge.Validate();
+                retryCount++;
+            }
+
+            if (challengeResult.Status != ChallengeStatus.Valid)
+            {
+                throw new Exception($"Challenge validation failed: {challengeResult.Status}");
+            }
+
+            // Finalize the order
+            var privateKey = KeyFactory.NewKey(KeyAlgorithm.ES256);
+            var cert = await order.Generate(new CsrInfo
+            {
+                CountryName = "US",
+                State = "State",
+                Locality = "City",
+                Organization = "SuperPanel",
+                OrganizationUnit = "IT",
+                CommonName = certificate.DomainName,
+            }, privateKey);
+
+            // Save certificate files
+            var certDir = Path.Combine(_configuration["SslSettings:CertificateDirectory"] ?? "/etc/ssl/certs", certificate.DomainName);
+            System.IO.Directory.CreateDirectory(certDir);
+
+            var certPath = Path.Combine(certDir, $"{certificate.DomainName}.crt");
+            var keyPath = Path.Combine(certDir, $"{certificate.DomainName}.key");
+            var chainPath = Path.Combine(certDir, "chain.pem");
+
+            // Save certificate
+            var certPem = cert.ToPem();
+            await File.WriteAllTextAsync(certPath, certPem);
+
+            // Save private key
+            var keyPem = privateKey.ToPem();
+            await File.WriteAllTextAsync(keyPath, keyPem);
+
+            // Save certificate chain (issuer certificates)
+            // Note: In Certes, the certificate chain is typically included in the cert.ToPem()
+            // For now, we'll save the main certificate. Chain can be retrieved separately if needed.
+            var issuerPem = cert.ToPem(); // Use the certificate PEM which may include chain
+            await File.WriteAllTextAsync(chainPath, issuerPem);
+
+            // Update certificate record
+            certificate.CertificatePath = certPath;
+            certificate.PrivateKeyPath = keyPath;
+            certificate.ChainPath = chainPath;
+            certificate.Status = SslCertificateStatus.Active;
+            certificate.Issuer = "Let's Encrypt";
+            certificate.IssuedAt = DateTime.UtcNow;
+            certificate.ExpiresAt = DateTime.UtcNow.AddDays(90);
+            certificate.LastRenewedAt = DateTime.UtcNow;
+            certificate.Notes = "Let's Encrypt certificate successfully issued.";
+
+            await _context.SaveChangesAsync();
+
+            // Clean up challenge file
+            if (File.Exists(challengeFile))
+            {
+                File.Delete(challengeFile);
+            }
+
+            _logger.LogInformation("Let's Encrypt certificate issued for {Domain}", certificate.DomainName);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to request Let's Encrypt certificate for {Domain}", certificate.DomainName);
+            certificate.Status = SslCertificateStatus.Failed;
+            certificate.Notes = $"ACME request failed: {ex.Message}";
+            await _context.SaveChangesAsync();
+            return false;
+        }
     }
 
     private async Task<bool> RenewLetsEncryptCertificateAsync(SslCertificate certificate)
     {
-        _logger.LogInformation("Renewing Let's Encrypt certificate for {Domain}", certificate.DomainName);
+        try
+        {
+            _logger.LogInformation("Renewing Let's Encrypt certificate for {Domain}", certificate.DomainName);
 
-        // Similar to request, but for renewal
-        await Task.Delay(1500);
+            // Get ACME settings from configuration
+            var acmeEmail = _configuration["SslSettings:AcmeSettings:Email"];
+            var useStaging = _configuration.GetValue<bool>("SslSettings:AcmeSettings:Staging", true);
+            var challengePath = _configuration["SslSettings:AcmeSettings:ChallengePath"] ?? "/var/www/.well-known/acme-challenge";
 
-        certificate.Status = SslCertificateStatus.Pending;
-        certificate.Notes = "Certificate renewal initiated.";
-        await _context.SaveChangesAsync();
+            if (string.IsNullOrEmpty(acmeEmail))
+            {
+                throw new InvalidOperationException("ACME email not configured in SslSettings:AcmeSettings:Email");
+            }
 
-        _ = Task.Run(() => ProcessLetsEncryptRenewalAsync(certificate.Id));
+            // Create ACME context
+            var acme = new AcmeContext(useStaging ? WellKnownServers.LetsEncryptStagingV2 : WellKnownServers.LetsEncryptV2);
 
-        return true;
+            // Create or load account
+            var account = await acme.NewAccount(acmeEmail, true);
+
+            // Create certificate order for renewal
+            var order = await acme.NewOrder(new[] { certificate.DomainName });
+
+            // Get authorization for the domain
+            var authz = (await order.Authorizations()).First();
+            var challenge = await authz.Http();
+
+            // Create challenge directory
+            System.IO.Directory.CreateDirectory(challengePath);
+
+            // Write challenge token to file
+            var challengeFile = Path.Combine(challengePath, challenge.Token);
+            await File.WriteAllTextAsync(challengeFile, challenge.KeyAuthz);
+
+            // Validate the challenge
+            var challengeResult = await challenge.Validate();
+
+            // Wait for validation to complete
+            var retryCount = 0;
+            while (challengeResult.Status == ChallengeStatus.Pending && retryCount < 30)
+            {
+                await Task.Delay(2000);
+                challengeResult = await challenge.Validate();
+                retryCount++;
+            }
+
+            if (challengeResult.Status != ChallengeStatus.Valid)
+            {
+                throw new Exception($"Challenge validation failed: {challengeResult.Status}");
+            }
+
+            // Finalize the order
+            var privateKey = KeyFactory.NewKey(KeyAlgorithm.ES256);
+            var cert = await order.Generate(new CsrInfo
+            {
+                CountryName = "US",
+                State = "State",
+                Locality = "City",
+                Organization = "SuperPanel",
+                OrganizationUnit = "IT",
+                CommonName = certificate.DomainName,
+            }, privateKey);
+
+            // Save certificate files (renewal overwrites existing files)
+            var certDir = Path.Combine(_configuration["SslSettings:CertificateDirectory"] ?? "/etc/ssl/certs", certificate.DomainName);
+            System.IO.Directory.CreateDirectory(certDir);
+
+            var certPath = Path.Combine(certDir, $"{certificate.DomainName}.crt");
+            var keyPath = Path.Combine(certDir, $"{certificate.DomainName}.key");
+            var chainPath = Path.Combine(certDir, "chain.pem");
+
+            // Save certificate
+            var certPem = cert.ToPem();
+            await File.WriteAllTextAsync(certPath, certPem);
+
+            // Save private key
+            var keyPem = privateKey.ToPem();
+            await File.WriteAllTextAsync(keyPath, keyPem);
+
+            // Save certificate chain (issuer certificates)
+            var issuerPem = cert.ToPem(); // Use the certificate PEM which may include chain
+            await File.WriteAllTextAsync(chainPath, issuerPem);
+
+            // Update certificate record
+            certificate.CertificatePath = certPath;
+            certificate.PrivateKeyPath = keyPath;
+            certificate.ChainPath = chainPath;
+            certificate.Status = SslCertificateStatus.Active;
+            certificate.Issuer = "Let's Encrypt";
+            certificate.IssuedAt = DateTime.UtcNow;
+            certificate.ExpiresAt = DateTime.UtcNow.AddDays(90);
+            certificate.LastRenewedAt = DateTime.UtcNow;
+            certificate.Notes = "Let's Encrypt certificate successfully renewed.";
+
+            await _context.SaveChangesAsync();
+
+            // Clean up challenge file
+            if (File.Exists(challengeFile))
+            {
+                File.Delete(challengeFile);
+            }
+
+            _logger.LogInformation("Let's Encrypt certificate renewed for {Domain}", certificate.DomainName);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to renew Let's Encrypt certificate for {Domain}", certificate.DomainName);
+            certificate.Status = SslCertificateStatus.Failed;
+            certificate.Notes = $"ACME renewal failed: {ex.Message}";
+            await _context.SaveChangesAsync();
+            return false;
+        }
     }
 
     private async Task<bool> GenerateSelfSignedCertificateAsync(SslCertificate certificate)
@@ -196,7 +390,7 @@ public class SslCertificateService : ISslCertificateService
             // This is a simplified example
 
             string certDir = Path.Combine(_configuration["SslSettings:CertificateDirectory"] ?? "/etc/ssl/certs", certificate.DomainName);
-            Directory.CreateDirectory(certDir);
+            System.IO.Directory.CreateDirectory(certDir);
 
             string certPath = Path.Combine(certDir, $"{certificate.DomainName}.crt");
             string keyPath = Path.Combine(certDir, $"{certificate.DomainName}.key");
@@ -240,7 +434,7 @@ public class SslCertificateService : ISslCertificateService
 
             // Simulate successful certificate generation
             string certDir = Path.Combine(_configuration["SslSettings:CertificateDirectory"] ?? "/etc/ssl/certs", certificate.DomainName);
-            Directory.CreateDirectory(certDir);
+            System.IO.Directory.CreateDirectory(certDir);
 
             certificate.CertificatePath = Path.Combine(certDir, $"{certificate.DomainName}.crt");
             certificate.PrivateKeyPath = Path.Combine(certDir, $"{certificate.DomainName}.key");
@@ -262,27 +456,5 @@ public class SslCertificateService : ISslCertificateService
         }
     }
 
-    private async Task ProcessLetsEncryptRenewalAsync(int certificateId)
-    {
-        try
-        {
-            await Task.Delay(3000); // Simulate renewal time
 
-            var certificate = await _context.SslCertificates.FindAsync(certificateId);
-            if (certificate == null) return;
-
-            certificate.Status = SslCertificateStatus.Active;
-            certificate.ExpiresAt = DateTime.UtcNow.AddDays(90);
-            certificate.LastRenewedAt = DateTime.UtcNow;
-            certificate.Notes = "Certificate successfully renewed.";
-
-            await _context.SaveChangesAsync();
-
-            _logger.LogInformation("Certificate renewed for {Domain}", certificate.DomainName);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to renew certificate {CertificateId}", certificateId);
-        }
-    }
 }

@@ -55,3 +55,17 @@ export interface CertificateStats {
   expiringSoon: number;
   expired: number;
 }
+
+export interface ProvisionRequest {
+  daysBeforeExpiry?: number; // Default 30 days
+}
+
+export interface ProvisioningStatus {
+  totalCertificates: number;
+  activeCertificates: number;
+  pendingCertificates: number;
+  failedCertificates: number;
+  expiringSoonCount: number; // Certificates expiring within 30 days
+  domainsWithoutSsl: number;
+  domainsWithExpiredSsl: number;
+}

@@ -230,6 +230,116 @@ public class SslCertificatesController : ControllerBase
 
         return NoContent();
     }
+
+    // POST: api/ssl-certificates/provision
+    [HttpPost("provision")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<IEnumerable<SslCertificate>>> ProvisionCertificates([FromBody] ProvisionRequest request)
+    {
+        var domains = await _context.Domains
+            .Where(d => d.SslEnabled == false || d.SslExpiry == null || d.SslExpiry <= DateTime.UtcNow.AddDays(request.DaysBeforeExpiry))
+            .ToListAsync();
+
+        var results = new List<SslCertificate>();
+
+        foreach (var domain in domains)
+        {
+            // Check if certificate already exists and is active
+            var existingCertificate = await _context.SslCertificates
+                .FirstOrDefaultAsync(c => c.DomainName == domain.Name && c.Status == SslCertificateStatus.Active);
+
+            if (existingCertificate != null)
+            {
+                // If certificate exists but domain SSL is not enabled, update domain
+                if (!domain.SslEnabled)
+                {
+                    domain.SslEnabled = true;
+                    domain.SslExpiry = existingCertificate.ExpiresAt;
+                    domain.UpdatedAt = DateTime.UtcNow;
+                    await _context.SaveChangesAsync();
+                }
+                continue;
+            }
+
+            // Create new certificate request
+            var certificate = new SslCertificate
+            {
+                DomainName = domain.Name,
+                DomainId = domain.Id,
+                Status = SslCertificateStatus.Pending,
+                Type = SslCertificateType.LetsEncrypt,
+                AutoRenew = true,
+                ValidationMethod = "http-01",
+                Notes = "Auto-provisioned",
+                ExpiresAt = DateTime.UtcNow.AddDays(90)
+            };
+
+            _context.SslCertificates.Add(certificate);
+            await _context.SaveChangesAsync();
+
+            // Trigger certificate generation
+            await _sslService.RequestCertificateAsync(certificate.Id);
+
+            results.Add(certificate);
+        }
+
+        return Ok(results);
+    }
+
+    // POST: api/ssl-certificates/renew-expiring
+    [HttpPost("renew-expiring")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<IEnumerable<SslCertificate>>> RenewExpiringCertificates([FromQuery] int days = 30)
+    {
+        var cutoffDate = DateTime.UtcNow.AddDays(days);
+
+        var certificates = await _context.SslCertificates
+            .Where(c => c.Status == SslCertificateStatus.Active && c.ExpiresAt <= cutoffDate && c.Type == SslCertificateType.LetsEncrypt)
+            .ToListAsync();
+
+        var results = new List<SslCertificate>();
+
+        foreach (var certificate in certificates)
+        {
+            // Trigger renewal
+            await _sslService.RenewCertificateAsync(certificate.Id);
+
+            certificate.Status = SslCertificateStatus.Pending;
+            certificate.LastRenewedAt = DateTime.UtcNow;
+            certificate.UpdatedAt = DateTime.UtcNow;
+
+            results.Add(certificate);
+        }
+
+        await _context.SaveChangesAsync();
+
+        return Ok(results);
+    }
+
+    // GET: api/ssl-certificates/provisioning-status
+    [HttpGet("provisioning-status")]
+    public async Task<ActionResult<ProvisioningStatus>> GetProvisioningStatus()
+    {
+        var totalCertificates = await _context.SslCertificates.CountAsync();
+        var activeCertificates = await _context.SslCertificates.CountAsync(c => c.Status == SslCertificateStatus.Active);
+        var pendingCertificates = await _context.SslCertificates.CountAsync(c => c.Status == SslCertificateStatus.Pending);
+        var failedCertificates = await _context.SslCertificates.CountAsync(c => c.Status == SslCertificateStatus.Failed);
+        var expiringSoon = await _context.SslCertificates.CountAsync(c => c.Status == SslCertificateStatus.Active && c.ExpiresAt <= DateTime.UtcNow.AddDays(30));
+
+        var domainsWithoutSsl = await _context.Domains.CountAsync(d => d.SslEnabled == false);
+        var domainsWithExpiredSsl = await _context.Domains.CountAsync(d => d.SslEnabled == true && d.SslExpiry <= DateTime.UtcNow);
+
+        return Ok(new ProvisioningStatus
+        {
+            TotalCertificates = totalCertificates,
+            ActiveCertificates = activeCertificates,
+            PendingCertificates = pendingCertificates,
+            FailedCertificates = failedCertificates,
+            ExpiringSoonCertificates = expiringSoon,
+            DomainsWithoutSsl = domainsWithoutSsl,
+            DomainsWithExpiredSsl = domainsWithExpiredSsl
+        });
+    }
 }
 
 // DTOs
@@ -249,4 +359,20 @@ public class CertificateInstallRequest
     public string? ChainPath { get; set; }
     public string? Issuer { get; set; }
     public DateTime ExpiresAt { get; set; }
+}
+
+public class ProvisionRequest
+{
+    public int DaysBeforeExpiry { get; set; } = 30;
+}
+
+public class ProvisioningStatus
+{
+    public int TotalCertificates { get; set; }
+    public int ActiveCertificates { get; set; }
+    public int PendingCertificates { get; set; }
+    public int FailedCertificates { get; set; }
+    public int ExpiringSoonCertificates { get; set; }
+    public int DomainsWithoutSsl { get; set; }
+    public int DomainsWithExpiredSsl { get; set; }
 }

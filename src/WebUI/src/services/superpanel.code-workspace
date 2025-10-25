@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"name": "superpanel",
+			"path": "../../../.."
+		}
+	],
+	"settings": {},
+	"extensions": {
+		"recommendations": [
+			"oxc.oxc-vscode"
+		]
+	}
+}

@@ -21,7 +21,7 @@ const validateSecureUrl = (url: string): string => {
 };
 
 // Import types
-import { SslCertificate, CertificateRequest, CertificateInstallRequest } from "../types";
+import { SslCertificate, CertificateRequest, CertificateInstallRequest, ProvisionRequest, ProvisioningStatus } from "../types";
 import {
   EmailAccount,
   EmailForwarder,
@@ -51,7 +51,7 @@ import {
   AlertComment
 } from "../types/alerts";
 import { DashboardStats } from "../types/dashboard";
-import { DnsRecord, DnsZone, DnsPropagationStatus, DnsRecordType, DnsRecordStatus } from "../types/domains";
+import { DnsRecord, DnsZone, DnsPropagationStatus } from "../types/domains";
 
 // Types
 export interface Server {
@@ -429,6 +429,12 @@ export const sslCertificateApi = {
     apiClient.put(`/api/ssl-certificates/${id}/install`, installRequest),
   renew: (id: number): Promise<void> => apiClient.put(`/api/ssl-certificates/${id}/renew`, {}),
   delete: (id: number): Promise<void> => apiClient.delete(`/api/ssl-certificates/${id}`),
+  provision: (request?: ProvisionRequest): Promise<void> =>
+    apiClient.post("/api/ssl-certificates/provision", request || {}),
+  renewExpiring: (request?: ProvisionRequest): Promise<void> =>
+    apiClient.post("/api/ssl-certificates/renew-expiring", request || {}),
+  getProvisioningStatus: (): Promise<ProvisioningStatus> =>
+    apiClient.get("/api/ssl-certificates/provisioning-status"),
 };
 
 // Email API functions
